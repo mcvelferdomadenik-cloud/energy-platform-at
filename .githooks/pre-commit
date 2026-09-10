@@ -10,12 +10,12 @@ if [ -z "$staged" ]; then
 fi
 
 if printf '%s\n' "$staged" | grep -qE '(^|/)\.env$'; then
-    echo "pre-commit: refusing to commit a .env file (THREAT_MODEL.md T1)" >&2
+    echo "pre-commit: refusing to commit a .env file" >&2
     exit 1
 fi
 
-if git diff --cached -U0 -- $staged | grep -qE '^\+.*(ENTSOE_API_TOKEN|SECURITY_TOKEN|securityToken)[=:[:space:]]+["'"'"']?[A-Za-z0-9._-]{16,}'; then
-    echo "pre-commit: a staged line looks like it contains a real token (THREAT_MODEL.md T4)" >&2
+if git diff --cached -U0 -- $staged | grep -qE '^\+.*([A-Z_]*TOKEN|[A-Z_]*PASSWORD|[A-Z_]*SECRET|securityToken)[=:[:space:]]+["'"'"']?[A-Za-z0-9._-]{16,}'; then
+    echo "pre-commit: a staged line looks like it contains a real token" >&2
     echo "            check it, and if it is a placeholder make it shorter than 16 characters" >&2
     exit 1
 fi
