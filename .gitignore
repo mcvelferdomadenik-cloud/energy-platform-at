@@ -1,0 +1,43 @@
+# --- Secrets: nothing here may ever reach a commit ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+
+# --- Private, never published even if the repo goes public ---
+# Internal working documents: agent instructions, architecture plan, threat model, decisions.
+# They live only on this machine. Keep a backup - they cannot be recovered from this repo.
+CLAUDE.md
+PROJECT_PLAN.md
+THREAT_MODEL.md
+decisions.md
+
+# --- Real / synthetic customer data: PII by design, stays local ---
+data/
+*.csv
+*.parquet
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- Scratch files ---
+try_*.py
+
+# --- dbt ---
+target/
+dbt_packages/
+logs/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
