@@ -10,6 +10,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 from defusedxml import ElementTree
@@ -19,9 +20,11 @@ TOKEN_ENV = "ENTSOE_API_TOKEN"  # noqa: S105 - the name of an environment variab
 
 AT_BIDDING_ZONE = "10YAT-APG------L"
 
-# UNVERIFIED: the official documentType code list is not reachable to a non-browser client.
-# A44 is from memory and is confirmed the first time a real call returns a price document.
 DOC_TYPE_DAY_AHEAD_PRICES = "A44"
+
+# ENTSO-E publishes more than one price sequence per delivery day. Sequence 1 is the day-ahead
+# coupling result; what sequence 2 holds is not stated in the official documentation.
+DAY_AHEAD_SEQUENCE = "1"
 
 REQUEST_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -120,15 +123,21 @@ def parse_price_document(xml: bytes | str) -> list[PricePoint]:
     if _local(root.tag) == "Acknowledgement_MarketDocument":
         raise EntsoeError(f"ENTSO-E rejected the query: {_text(root, 'text') or 'no reason given'}")
 
-    points: list[PricePoint] = []
+    prices: dict[datetime, float] = {}
     for series in (node for node in root.iter() if _local(node.tag) == "TimeSeries"):
         curve_type = _text(series, "curveType")
         for period in (node for node in series.iter() if _local(node.tag) == "Period"):
-            points.extend(_parse_period(period, curve_type))
+            for point in _parse_period(period, curve_type):
+                seen = prices.setdefault(point.interval_start, point.price_eur_mwh)
+                if seen != point.price_eur_mwh:
+                    raise EntsoeError(
+                        f"two different prices for {point.interval_start:%Y-%m-%d %H:%M}: "
+                        f"{seen} and {point.price_eur_mwh}"
+                    )
 
-    if not points:
+    if not prices:
         raise EntsoeError("document contained no price points")
-    return sorted(points, key=lambda point: point.interval_start)
+    return [PricePoint(start, price) for start, price in sorted(prices.items())]
 
 
 def _parse_period(period, curve_type: str | None) -> list[PricePoint]:
@@ -179,6 +188,7 @@ def day_ahead_prices(
                 "out_Domain": domain,
                 "periodStart": format_period(start),
                 "periodEnd": format_period(end),
+                "ClassificationSequence_AttributeInstanceComponent.Position": DAY_AHEAD_SEQUENCE,
             }
         )
     )
@@ -189,11 +199,13 @@ def main() -> None:
     from dotenv import load_dotenv
 
     load_dotenv()
-    midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    vienna = ZoneInfo("Europe/Vienna")
+    midnight = datetime.now(vienna).replace(hour=0, minute=0, second=0, microsecond=0)
     prices = day_ahead_prices(midnight, midnight + timedelta(days=1))
-    print(f"{len(prices)} price points for AT, {midnight:%Y-%m-%d} UTC\n")
+    print(f"{len(prices)} price points for AT, {midnight:%Y-%m-%d} Vienna time\n")
     for point in prices:
-        print(f"  {point.interval_start:%H:%M}  {point.price_eur_mwh:>8.2f} EUR/MWh")
+        local = point.interval_start.astimezone(vienna)
+        print(f"  {local:%H:%M}  {point.price_eur_mwh:>8.2f} EUR/MWh")
 
 
 if __name__ == "__main__":
