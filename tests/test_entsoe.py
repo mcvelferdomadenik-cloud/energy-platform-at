@@ -17,14 +17,13 @@ from megavolt.entsoe import (
 NS = "urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:0"
 
 
-def price_document(curve_type: str, positions: dict[int, float]) -> str:
-    """Build a three-hour Publication_MarketDocument containing only these positions."""
+def time_series(curve_type: str, positions: dict[int, float]) -> str:
+    """Build one three-hour TimeSeries containing only these positions."""
     points = "".join(
         f"<Point><position>{position}</position><price.amount>{amount}</price.amount></Point>"
         for position, amount in positions.items()
     )
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<Publication_MarketDocument xmlns="{NS}">
+    return f"""
   <TimeSeries>
     <curveType>{curve_type}</curveType>
     <Period>
@@ -35,8 +34,19 @@ def price_document(curve_type: str, positions: dict[int, float]) -> str:
       <resolution>PT60M</resolution>
       {points}
     </Period>
-  </TimeSeries>
+  </TimeSeries>"""
+
+
+def document_with(*series: str) -> str:
+    """Wrap time series into a Publication_MarketDocument, as ENTSO-E sends several at once."""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<Publication_MarketDocument xmlns="{NS}">{"".join(series)}
 </Publication_MarketDocument>"""
+
+
+def price_document(curve_type: str, positions: dict[int, float]) -> str:
+    """Build a document holding a single time series."""
+    return document_with(time_series(curve_type, positions))
 
 
 ACKNOWLEDGEMENT = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -89,6 +99,21 @@ def test_parse_leaves_a_gap_visible_when_the_curve_type_does_not_repeat():
 def test_parse_raises_when_entsoe_acknowledges_instead_of_answering():
     with pytest.raises(EntsoeError, match="No matching data found"):
         parse_price_document(ACKNOWLEDGEMENT)
+
+
+def test_parse_collapses_a_time_series_that_entsoe_sent_twice():
+    series = time_series("A01", {1: 85.5, 2: 90.0, 3: 78.25})
+    points = parse_price_document(document_with(series, series))
+    assert [point.price_eur_mwh for point in points] == [85.5, 90.0, 78.25]
+
+
+def test_parse_refuses_two_different_prices_for_the_same_interval():
+    document = document_with(
+        time_series("A01", {1: 85.5, 2: 90.0, 3: 78.25}),
+        time_series("A01", {1: 190.0, 2: 90.0, 3: 78.25}),
+    )
+    with pytest.raises(EntsoeError, match="two different prices"):
+        parse_price_document(document)
 
 
 def test_parse_raises_on_an_empty_document():
