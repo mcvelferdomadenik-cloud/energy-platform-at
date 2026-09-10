@@ -9,6 +9,7 @@ credentials.json
 # --- Private, never published even if the repo goes public ---
 # Internal working documents: agent instructions, architecture plan, threat model, decisions.
 # They live only on this machine. Keep a backup - they cannot be recovered from this repo.
+.claude/
 CLAUDE.md
 PROJECT_PLAN.md
 THREAT_MODEL.md
