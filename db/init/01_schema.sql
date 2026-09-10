@@ -1,5 +1,4 @@
--- Runs once, the first time the warehouse volume is created.
--- Three schemas, one direction of travel: raw -> staging -> marts.
+-- Runs once when the warehouse volume is created.
 
 CREATE EXTENSION IF NOT EXISTS timescaledb;
 
@@ -7,9 +6,7 @@ CREATE SCHEMA IF NOT EXISTS raw;
 CREATE SCHEMA IF NOT EXISTS staging;
 CREATE SCHEMA IF NOT EXISTS marts;
 
--- Day-ahead prices exactly as ENTSO-E delivered them. Append-only.
--- A corrected price arrives as a new row with a different payload_hash, never as an update,
--- so the history of what we knew and when stays intact.
+-- Append-only. A correction is a new row with a different payload_hash, never an update.
 CREATE TABLE raw.day_ahead_price (
     interval_start timestamptz      NOT NULL,
     bidding_zone   text             NOT NULL,
