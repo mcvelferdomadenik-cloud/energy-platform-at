@@ -1,14 +1,46 @@
 name: megavolt
 
+x-warehouse-image: &warehouse-image
+  image: timescale/timescaledb:2.30.0-pg17@sha256:29e5ba346fc68085e5246aa79d9deda8d819a575e2211eb8d1c0082446ca8177
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
+  image: megavolt/airflow:3.3.1
+  restart: unless-stopped
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?set AIRFLOW_FERNET_KEY in .env}
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?set AIRFLOW_DB_PASSWORD in .env}@airflow-db/airflow
+    WAREHOUSE_DSN: >-
+      postgresql://megavolt_writer:${WAREHOUSE_WRITER_PASSWORD:?set WAREHOUSE_WRITER_PASSWORD in .env}@warehouse:5432/${POSTGRES_DB}
+  volumes:
+    - ./dags:/opt/airflow/dags:ro
+    - airflow_logs:/opt/airflow/logs
+  depends_on:
+    airflow-db:
+      condition: service_healthy
+    airflow-init:
+      condition: service_completed_successfully
+
 services:
   warehouse:
-    image: timescale/timescaledb:2.30.0-pg17@sha256:29e5ba346fc68085e5246aa79d9deda8d819a575e2211eb8d1c0082446ca8177
+    <<: *warehouse-image
     container_name: megavolt-warehouse
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      WAREHOUSE_WRITER_PASSWORD: ${WAREHOUSE_WRITER_PASSWORD:?set WAREHOUSE_WRITER_PASSWORD in .env}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
@@ -20,5 +52,64 @@ services:
       timeout: 5s
       retries: 12
 
+  airflow-db:
+    <<: *warehouse-image
+    container_name: megavolt-airflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?set AIRFLOW_DB_PASSWORD in .env}
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: megavolt-airflow-init
+    restart: "no"
+    command: version
+    environment:
+      <<: *airflow-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USER:?set AIRFLOW_ADMIN_USER in .env}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in .env}
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: megavolt-airflow-apiserver
+    command: api-server
+    ports:
+      - "127.0.0.1:${AIRFLOW_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: megavolt-airflow-scheduler
+    command: scheduler
+    environment:
+      <<: *airflow-env
+      ENTSOE_API_TOKEN: ${ENTSOE_API_TOKEN:?set ENTSOE_API_TOKEN in .env}
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: megavolt-airflow-dag-processor
+    command: dag-processor
+
 volumes:
   warehouse_data:
+  airflow_db_data:
+  airflow_logs:

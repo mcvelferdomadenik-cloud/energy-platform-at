@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+.git
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+data/
+try_*.py
+
+# Internal documents, same rule as .gitignore
+CLAUDE.md
+PROJECT_PLAN.md
+THREAT_MODEL.md
+decisions.md
+.claude/
