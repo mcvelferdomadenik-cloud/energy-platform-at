@@ -1,13 +1,16 @@
 [project]
 name = "megavolt"
 version = "0.1.0"
-description = "Energy retail imbalance settlement and pricing platform for MegaVolt d.o.o. (fictional)"
+description = "Settlement and pricing platform for MegaVolt, a fictional Austrian electricity supplier"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "defusedxml>=0.7.1",
     "httpx>=0.28.1",
-    "python-dotenv>=1.2.3",
+    # Exact: these two must match the Airflow 3.3.1 constraints file, so the laptop and
+    # the Airflow image run identical code. Bump them together with the Airflow version.
+    "psycopg[binary]==3.3.4",
+    "python-dotenv==1.2.2",
     "tzdata>=2026.3",
 ]
 
@@ -20,7 +23,7 @@ packages = ["src/megavolt"]
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "dags"]
 
 [tool.ruff.lint]
 select = [

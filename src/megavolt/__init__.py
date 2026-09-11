@@ -1,1 +1,1 @@
-"""MegaVolt d.o.o. energy retail imbalance and pricing platform."""
+"""MegaVolt: settlement and pricing for an Austrian electricity supplier."""
