@@ -7,8 +7,9 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "defusedxml>=0.7.1",
     "httpx>=0.28.1",
-    # Exact: these two must match the Airflow 3.3.1 constraints file, so the laptop and
+    # Exact: these three must match the Airflow 3.3.1 constraints file, so the laptop and
     # the Airflow image run identical code. Bump them together with the Airflow version.
+    "confluent-kafka==2.15.0",
     "psycopg[binary]==3.3.4",
     "python-dotenv==1.2.2",
     "tzdata>=2026.3",
