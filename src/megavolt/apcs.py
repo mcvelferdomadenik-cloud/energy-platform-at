@@ -19,7 +19,9 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
-ARCHIVE_URL = "https://www.apcs.at/fileadmin/user_upload/APCS/Clearing/Lastprofile/synthload{year}.zip"
+ARCHIVE_URL = (
+    "https://www.apcs.at/fileadmin/user_upload/APCS/Clearing/Lastprofile/synthload{year}.zip"
+)
 
 REQUEST_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
