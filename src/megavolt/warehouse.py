@@ -5,12 +5,13 @@ from __future__ import annotations
 import hashlib
 import os
 from collections.abc import Iterable, Iterator, Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from itertools import chain
 
 import psycopg
 
 from megavolt.apcs import ProfilePoint
+from megavolt.community import Member
 from megavolt.entsoe import PricePoint
 
 DSN_ENV = "WAREHOUSE_DSN"
@@ -26,6 +27,14 @@ _INSERT_LOAD_PROFILE = """
 INSERT INTO raw.load_profile
     (profile_type, interval_start, profile_year, value, source, payload_hash)
 VALUES (%s, %s, %s, %s, %s, %s)
+ON CONFLICT DO NOTHING
+"""
+
+_INSERT_METERING_POINT = """
+INSERT INTO raw.metering_point
+    (metering_point, valid_from, profile_type, segment, annual_kwh, meter_id,
+     source, payload_hash)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT DO NOTHING
 """
 
@@ -105,4 +114,45 @@ def store_load_profiles(points: Iterable[ProfilePoint], profile_year: int) -> in
     # switch to COPY ... FROM STDIN if this ever runs more often.
     with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
         cursor.executemany(_INSERT_LOAD_PROFILE, rows())
+        return cursor.rowcount
+
+
+def store_metering_points(points: Sequence[Member], valid_from: datetime) -> int:
+    """Register our own metering points and return how many rows were new.
+
+    A supplier never receives the other members' metering points, so handing one to the
+    warehouse is a mistake worth failing on rather than a row worth writing (D20).
+    """
+    if not points:
+        raise WarehouseError("refusing to store an empty set of metering points")
+
+    foreign = [point.metering_point for point in points if not point.ours]
+    if foreign:
+        raise WarehouseError(
+            f"refusing to store {len(foreign)} metering points that are not our customers"
+        )
+
+    rows = [
+        (
+            point.metering_point,
+            valid_from,
+            point.profile_type,
+            point.segment,
+            point.annual_kwh,
+            point.meter_id,
+            "simulator",
+            _fingerprint(
+                point.metering_point,
+                valid_from.isoformat(),
+                point.profile_type,
+                point.segment,
+                point.annual_kwh,
+                point.meter_id,
+            ),
+        )
+        for point in points
+    ]
+
+    with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
+        cursor.executemany(_INSERT_METERING_POINT, rows)
         return cursor.rowcount

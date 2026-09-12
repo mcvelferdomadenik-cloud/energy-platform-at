@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from megavolt.apcs import ProfilePoint
+from megavolt.community import VALID_FROM, members
 from megavolt.entsoe import PricePoint
 from megavolt.warehouse import (
     WarehouseError,
@@ -13,6 +14,7 @@ from megavolt.warehouse import (
     profile_payload_hash,
     store_day_ahead_prices,
     store_load_profiles,
+    store_metering_points,
 )
 
 ZONE = "10YAT-APG------L"
@@ -61,3 +63,21 @@ def test_a_revised_profile_value_gets_a_different_fingerprint():
 def test_storing_no_profiles_is_refused_before_the_database_is_touched():
     with pytest.raises(WarehouseError, match="empty set"):
         store_load_profiles(iter([]), 2025)
+
+
+def test_storing_no_metering_points_is_refused():
+    with pytest.raises(WarehouseError, match="empty set"):
+        store_metering_points([], VALID_FROM)
+
+
+def test_a_metering_point_that_is_not_our_customer_is_refused():
+    theirs = [member for member in members("test-seed") if not member.ours]
+    with pytest.raises(WarehouseError, match="not our customers"):
+        store_metering_points(theirs[:1], VALID_FROM)
+
+
+def test_our_own_metering_points_are_accepted_up_to_the_database_call(monkeypatch):
+    monkeypatch.delenv("WAREHOUSE_DSN", raising=False)
+    ours = [member for member in members("test-seed") if member.ours]
+    with pytest.raises(WarehouseError, match=".env.example"):
+        store_metering_points(ours[:1], VALID_FROM)
