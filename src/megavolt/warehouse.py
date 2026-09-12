@@ -30,6 +30,13 @@ VALUES (%s, %s, %s, %s, %s, %s)
 ON CONFLICT DO NOTHING
 """
 
+_SELECT_LOAD_PROFILE = """
+SELECT DISTINCT ON (profile_type, interval_start) profile_type, interval_start, value
+FROM raw.load_profile
+WHERE profile_year = %s AND profile_type = ANY(%s)
+ORDER BY profile_type, interval_start, received_at DESC, payload_hash DESC
+"""
+
 _INSERT_METERING_POINT = """
 INSERT INTO raw.metering_point
     (metering_point, valid_from, profile_type, segment, annual_kwh, meter_id,
@@ -115,6 +122,27 @@ def store_load_profiles(points: Iterable[ProfilePoint], profile_year: int) -> in
     with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
         cursor.executemany(_INSERT_LOAD_PROFILE, rows())
         return cursor.rowcount
+
+
+def load_profiles(profile_year: int, types: Sequence[str]) -> dict[str, dict[datetime, float]]:
+    """Read whole profiles by type, newest delivery winning where a value was republished."""
+    if not types:
+        raise WarehouseError("refusing to read an empty set of profile types")
+
+    with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
+        cursor.execute(_SELECT_LOAD_PROFILE, (profile_year, list(types)))
+        rows = cursor.fetchall()
+
+    profiles: dict[str, dict[datetime, float]] = {name: {} for name in types}
+    for profile_type, interval_start, value in rows:
+        profiles[profile_type][interval_start] = value
+
+    empty = sorted(name for name, series in profiles.items() if not series)
+    if empty:
+        raise WarehouseError(
+            f"no {profile_year} profile stored for {', '.join(empty)} - run the apcs DAG first"
+        )
+    return profiles
 
 
 def store_metering_points(points: Sequence[Member], valid_from: datetime) -> int:
