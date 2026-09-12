@@ -19,10 +19,22 @@ from __future__ import annotations
 
 import hashlib
 import random
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 
-from megavolt.community import GENERATION_SEGMENT, VIENNA, Member
-from megavolt.readings import RESOLUTION
+from megavolt.community import GENERATION_SEGMENT, VALID_FROM, VIENNA, Member
+from megavolt.readings import (
+    READINGS_TOPIC,
+    RESOLUTION,
+    bootstrap_servers,
+    community_batch,
+    encode,
+    reading_batch,
+    utc_text,
+)
+
+# Kafka needs a key for every message and the community has no metering point to use.
+COMMUNITY_KEY = "community"
 
 # Spread of the daily level of one member: a cold week, a holiday, somebody working from home.
 DAY_LEVEL_SIGMA = 0.12
@@ -37,6 +49,33 @@ CLOUD_CEILING = 1.30
 DECIMALS = 4
 
 PROFILE_NORMALISATION = 1000.0
+
+# --- How badly the data arrives. Signed off 2026-09-12, modelling assumptions, not measurements.
+# The grid operator sends previous-day values overnight, but not all of them and not all correct.
+
+# A point-day that misses its slot and turns up one to three days later.
+LATE_SHARE = 0.08
+LATE_DAYS = (1, 2, 3)
+
+# A point-day whose first delivery was wrong and is superseded by a version 2 later.
+CORRECTION_SHARE = 0.03
+CORRECTION_LAG_DAYS = (5, 6, 7, 8, 9)
+CORRECTED_INTERVALS = (4, 12)
+CORRECTION_SIGMA = 0.30
+
+# An interval that is simply never delivered. It stays an absent row, never a zero.
+MISSING_SHARE = 0.002
+
+# A meter exchanged during the year. Modelled at local midnight, so one day has one meter.
+# ponytail: a real swap happens mid-day, which would split a batch in two and change the
+# staging grain to (point x interval x meter). Move the boundary if settlement ever needs it.
+METER_SWAP_SHARE_PER_YEAR = 0.02
+METER_LETTERS = "ABCDEFGHIJ"
+
+# When the overnight delivery lands, Vienna time, on the day after the consumption day.
+DELIVERY_TIME = time(3, 30)
+
+MAX_LOOKBACK_DAYS = 1 + max(LATE_DAYS) + max(CORRECTION_LAG_DAYS)
 
 
 class SimulationError(RuntimeError):
@@ -196,9 +235,269 @@ def simulate_day(
     return intervals, consumption, allocate(consumption, generation), generation
 
 
-def _demo() -> None:
-    """Print one day of the truth model, so the shape can be eyeballed without a database."""
-    import sys
+def delay_days(point: str, day: date, seed: str) -> int:
+    """How many days late this point-day arrives. Drawn from the pair, never from the clock."""
+    generator = rng(seed, "delay", point, day)
+    if generator.random() >= LATE_SHARE:
+        return 0
+    return generator.choice(LATE_DAYS)
+
+
+def is_corrected(point: str, day: date, seed: str) -> bool:
+    """Whether this point-day's first delivery turns out to be wrong."""
+    return rng(seed, "corrected", point, day).random() < CORRECTION_SHARE
+
+
+def correction_lag_days(point: str, day: date, seed: str) -> int:
+    """How long after the first delivery the correction follows it."""
+    return rng(seed, "correction_lag", point, day).choice(CORRECTION_LAG_DAYS)
+
+
+def corrected_positions(point: str, day: date, count: int, seed: str) -> tuple[int, ...]:
+    """Which intervals of the day the correction touches. The rest stay untouched."""
+    generator = rng(seed, "corrected_positions", point, day)
+    how_many = min(generator.randint(*CORRECTED_INTERVALS), count)
+    return tuple(sorted(generator.sample(range(count), how_many)))
+
+
+def is_missing(point: str, day: date, position: int, seed: str) -> bool:
+    """Whether one interval is never delivered at all."""
+    return rng(seed, "missing", point, day, position).random() < MISSING_SHARE
+
+
+def meter_id_on(member: Member, day: date, seed: str) -> str:
+    """The meter serving this point on this day, which changes when a meter is exchanged."""
+    swaps = sum(
+        1
+        for year in range(VALID_FROM.year, day.year + 1)
+        for swap in (_swap_day(member.metering_point, year, seed),)
+        if swap is not None and swap <= day
+    )
+    return f"{member.meter_id[:-1]}{METER_LETTERS[swaps % len(METER_LETTERS)]}"
+
+
+def _swap_day(point: str, year: int, seed: str) -> date | None:
+    """The day a meter was exchanged at this point in this year, if it was."""
+    generator = rng(seed, "meter_swap", point, year)
+    if generator.random() >= METER_SWAP_SHARE_PER_YEAR:
+        return None
+    start = date(year, 1, 1)
+    span = (date(year + 1, 1, 1) - start).days
+    return start + timedelta(days=generator.randrange(span))
+
+
+def meter_history(member: Member, year: int, seed: str) -> tuple[tuple[date, str], ...]:
+    """Every meter this point has had through the end of `year`, with the day it took over."""
+    history = [(VALID_FROM.date(), meter_id_on(member, VALID_FROM.date(), seed))]
+    for candidate in range(VALID_FROM.year, year + 1):
+        swap = _swap_day(member.metering_point, candidate, seed)
+        if swap is not None and swap > VALID_FROM.date():
+            history.append((swap, meter_id_on(member, swap, seed)))
+    return tuple(history)
+
+
+def _delivered_at(consumption_day: date, offset_days: int) -> datetime:
+    """When a delivery lands: the morning after the consumption day, plus any delay."""
+    landing = consumption_day + timedelta(days=1 + offset_days)
+    return datetime.combine(landing, DELIVERY_TIME, VIENNA).astimezone(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class Delivery:
+    """One message to send, under the key it belongs to."""
+
+    key: str
+    payload: dict[str, object]
+
+
+def deliveries_for(
+    run_day: date,
+    members: tuple[Member, ...],
+    profiles: dict[str, dict[datetime, float]],
+    seed: str,
+) -> tuple[Delivery, ...]:
+    """Everything that arrives on one day: yesterday's values, the late ones, the corrections.
+
+    A run does not deliver one consumption day. It delivers whatever the grid operator got
+    round to sending, which is why a pipeline needs a reprocessing window rather than a
+    single-day assumption.
+    """
+    ours = tuple(member for member in members if member.ours)
+    if not ours:
+        raise SimulationError("the registry holds none of our customers")
+
+    firsts: dict[date, list[Member]] = {}
+    corrections: dict[date, list[Member]] = {}
+    for age in range(MAX_LOOKBACK_DAYS):
+        day = run_day - timedelta(days=1 + age)
+        for member in ours:
+            point = member.metering_point
+            delay = delay_days(point, day, seed)
+            if age == delay:
+                firsts.setdefault(day, []).append(member)
+            elif is_corrected(point, day, seed) and age == delay + correction_lag_days(
+                point, day, seed
+            ):
+                corrections.setdefault(day, []).append(member)
+
+    truth = _remembered(members, profiles, seed)
+    deliveries: list[Delivery] = [_community_delivery(run_day, truth)]
+
+    for day, people in firsts.items():
+        intervals, consumption, allocated, _ = truth(day)
+        for member in people:
+            deliveries.append(_first_delivery(member, day, intervals, consumption, allocated, seed))
+
+    for day, people in corrections.items():
+        intervals, consumption, allocated, _ = truth(day)
+        for member in people:
+            correction = _correction(member, day, intervals, consumption, allocated, seed)
+            if correction is not None:
+                deliveries.append(correction)
+
+    # A fixed order, so two runs of the same day emit the same bytes in the same sequence.
+    return tuple(
+        sorted(deliveries, key=lambda d: (d.key, d.payload["delivered_at"], d.payload["version"]))
+    )
+
+
+def _remembered(members: tuple[Member, ...], profiles: dict[str, dict[datetime, float]], seed: str):
+    """Simulate each day at most once: a run touches up to two weeks of consumption days."""
+    remembered: dict[date, tuple] = {}
+
+    def truth(day: date) -> tuple:
+        if day not in remembered:
+            remembered[day] = simulate_day(day, members, profiles, seed)
+        return remembered[day]
+
+    return truth
+
+
+def _community_delivery(run_day: date, truth) -> Delivery:
+    """The community's own totals for yesterday.
+
+    ponytail: the community reports itself on time and never corrects. In reality the final
+    allocation is only fixed by day 16; model that when phase 2 reconciles against it.
+    """
+    day = run_day - timedelta(days=1)
+    intervals, consumption, _, generation = truth(day)
+    payload = community_batch(
+        1, _delivered_at(day, 0), intervals[0], generation, community_totals(consumption)
+    )
+    return Delivery(COMMUNITY_KEY, payload)
+
+
+def _first_delivery(
+    member: Member,
+    day: date,
+    intervals: tuple[datetime, ...],
+    consumption: dict[str, tuple[float, ...]],
+    allocated: dict[str, tuple[float, ...]],
+    seed: str,
+) -> Delivery:
+    """The overnight delivery: mostly right, sometimes incomplete, sometimes wrong."""
+    point = member.metering_point
+    used: list[float | None] = list(consumption[point])
+    given: list[float | None] = list(allocated[point])
+
+    wrong = (
+        set(corrected_positions(point, day, len(intervals), seed))
+        if is_corrected(point, day, seed)
+        else set()
+    )
+    estimates = rng(seed, "estimate", point, day)
+
+    for position in range(len(intervals)):
+        if is_missing(point, day, position, seed):
+            used[position] = given[position] = None
+        elif position in wrong:
+            used[position] = round(
+                used[position] * _unit_lognormal(estimates, CORRECTION_SIGMA), DECIMALS
+            )
+            given[position] = min(given[position], used[position])
+
+    payload = reading_batch(
+        point,
+        meter_id_on(member, day, seed),
+        1,
+        _delivered_at(day, delay_days(point, day, seed)),
+        intervals[0],
+        used,
+        given,
+    )
+    return Delivery(point, payload)
+
+
+def _correction(
+    member: Member,
+    day: date,
+    intervals: tuple[datetime, ...],
+    consumption: dict[str, tuple[float, ...]],
+    allocated: dict[str, tuple[float, ...]],
+    seed: str,
+) -> Delivery | None:
+    """Version 2: the true values, for the intervals the first delivery got wrong.
+
+    Everything it does not touch is `null`, so the winner rule has to keep version 1 on those
+    intervals rather than blanking them. That is the case step 9 has to get right.
+    """
+    point = member.metering_point
+    count = len(intervals)
+    used: list[float | None] = [None] * count
+    given: list[float | None] = [None] * count
+
+    for position in corrected_positions(point, day, count, seed):
+        if is_missing(point, day, position, seed):
+            continue
+        used[position] = consumption[point][position]
+        given[position] = allocated[point][position]
+
+    if all(value is None for value in used):
+        return None
+
+    offset = delay_days(point, day, seed) + correction_lag_days(point, day, seed)
+    payload = reading_batch(
+        point,
+        meter_id_on(member, day, seed),
+        2,
+        _delivered_at(day, offset),
+        intervals[0],
+        used,
+        given,
+    )
+    return Delivery(point, payload)
+
+
+def registrations(
+    members: tuple[Member, ...], year: int, seed: str
+) -> dict[datetime, list[Member]]:
+    """Our metering points and every meter that has served them, grouped by the day it took over."""
+    grouped: dict[datetime, list[Member]] = {}
+    for member in members:
+        if not member.ours:
+            continue
+        for valid_from, meter in meter_history(member, year, seed):
+            moment = datetime.combine(valid_from, time.min, VIENNA)
+            grouped.setdefault(moment, []).append(replace(member, meter_id=meter))
+    return grouped
+
+
+def _profiles_for(run_day: date, members: tuple[Member, ...]):
+    """Load every profile year a run can reach back into."""
+    from megavolt.warehouse import load_profiles
+
+    wanted = sorted({member.profile_type for member in members})
+    earliest = run_day - timedelta(days=MAX_LOOKBACK_DAYS)
+    profiles: dict[str, dict[datetime, float]] = {name: {} for name in wanted}
+    for year in sorted({earliest.year, run_day.year}):
+        for name, series in load_profiles(year, wanted).items():
+            profiles[name].update(series)
+    return profiles
+
+
+def main() -> None:
+    """Produce one delivery day into Redpanda, or print it and send nothing."""
+    import argparse
 
     from dotenv import load_dotenv
 
@@ -206,35 +505,97 @@ def _demo() -> None:
 
     from megavolt.community import members as registry
     from megavolt.community import seed as default_seed
-    from megavolt.warehouse import load_profiles
 
-    day = date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else date(2025, 3, 1)
-    people = registry()
-    wanted = sorted({member.profile_type for member in people})
-    profiles = load_profiles(day.year, wanted)
-
-    intervals, consumption, allocated, generation = simulate_day(
-        day, people, profiles, default_seed()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--delivery-date",
+        required=True,
+        type=date.fromisoformat,
+        help="the day the messages arrive, which carries the previous day's consumption",
     )
-    totals = community_totals(consumption)
-    spare = surplus(generation, consumption)
+    parser.add_argument(
+        "--dry-run", action="store_true", help="print what would be sent and send nothing"
+    )
+    parser.add_argument(
+        "--register", action="store_true", help="register our metering points before producing"
+    )
+    arguments = parser.parse_args()
 
-    print(f"{day} in Vienna: {len(intervals)} intervals, {len(consumption)} members\n")
-    print("  interval (UTC)      generation   consumption   allocated     surplus")
-    for position in range(0, len(intervals), 8):
-        share = sum(series[position] for series in allocated.values())
+    seed = default_seed()
+    people = registry(seed)
+    profiles = _profiles_for(arguments.delivery_date, people)
+    deliveries = deliveries_for(arguments.delivery_date, people, profiles, seed)
+
+    if arguments.register:
+        from megavolt.warehouse import store_metering_points
+
+        stored = sum(
+            store_metering_points(group, valid_from)
+            for valid_from, group in sorted(
+                registrations(people, arguments.delivery_date.year, seed).items()
+            )
+        )
+        print(f"registered {stored} new metering point rows")
+
+    if arguments.dry_run:
+        _print(arguments.delivery_date, deliveries)
+        return
+
+    _produce(deliveries)
+
+
+def _print(run_day: date, deliveries: tuple[Delivery, ...]) -> None:
+    """Print a digest of one run. Identical content prints identically, which is the point."""
+    firsts = [d for d in deliveries if d.payload["version"] == 1 and d.key != COMMUNITY_KEY]
+    corrections = [d for d in deliveries if d.payload["version"] > 1]
+
+    # Everything arrives today, so lateness shows in which consumption day a message carries.
+    yesterday = day_intervals(run_day - timedelta(days=1))[0]
+    on_time = sum(1 for d in firsts if d.payload["interval_start"] == utc_text(yesterday))
+
+    print(f"{run_day}: {len(deliveries)} messages")
+    print(
+        f"  {len(firsts)} first deliveries: {on_time} for yesterday, {len(firsts) - on_time} late"
+    )
+    print(f"  {len(corrections)} corrections")
+    print(f"  {sum(1 for d in deliveries if d.key == COMMUNITY_KEY)} community aggregate\n")
+    for delivery in deliveries:
+        encoded = encode(delivery.payload)
+        absent = sum(1 for value in delivery.payload["consumption"] if value is None)
         print(
-            f"  {intervals[position]:%Y-%m-%d %H:%M}  {generation[position]:>10.2f}"
-            f"  {totals[position]:>12.2f}  {share:>10.2f}  {spare[position]:>10.2f}"
+            f"  {delivery.key}  v{delivery.payload['version']}"
+            f"  delivered {delivery.payload['delivered_at']}"
+            f"  from {delivery.payload['interval_start']}"
+            f"  {len(encoded):>5} bytes  {absent:>3} absent"
+            f"  sha {hashlib.sha256(encoded).hexdigest()[:12]}"
         )
 
-    covered = sum(sum(series) for series in allocated.values())
-    used = sum(totals)
-    made = sum(generation)
-    print(f"\n  day totals: generated {made:.1f} kWh, consumed {used:.1f} kWh")
-    print(f"  community covered {covered:.1f} kWh = {covered / used:.1%} of its consumption")
-    print(f"  our volume is what is left of our customers' share of that {used:.1f} kWh")
+
+def _produce(deliveries: tuple[Delivery, ...]) -> None:
+    """Send every message, then wait for the broker to acknowledge all of them."""
+    from confluent_kafka import Producer
+
+    failures: list[str] = []
+
+    def report(error, message) -> None:
+        if error is not None:
+            failures.append(f"{message.key()!r}: {error}")
+
+    producer = Producer(
+        {"bootstrap.servers": bootstrap_servers(), "enable.idempotence": True, "acks": "all"}
+    )
+    for delivery in deliveries:
+        producer.produce(
+            READINGS_TOPIC, key=delivery.key, value=encode(delivery.payload), on_delivery=report
+        )
+    remaining = producer.flush(timeout=60)
+
+    if remaining:
+        raise SimulationError(f"{remaining} messages were never acknowledged")
+    if failures:
+        raise SimulationError(f"{len(failures)} messages failed: {failures[0]}")
+    print(f"produced {len(deliveries)} messages to {READINGS_TOPIC}")
 
 
 if __name__ == "__main__":
-    _demo()
+    main()

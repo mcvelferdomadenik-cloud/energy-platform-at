@@ -8,14 +8,30 @@ from datetime import date, datetime, timedelta
 
 import pytest
 
-from megavolt.community import GENERATION_PROFILE, GENERATION_SEGMENT, Member
+from megavolt.community import GENERATION_PROFILE, GENERATION_SEGMENT, VALID_FROM, VIENNA, Member
+from megavolt.readings import decode, encode, readings_of, utc_text
 from megavolt.simulate import (
+    COMMUNITY_KEY,
+    LATE_DAYS,
+    MAX_LOOKBACK_DAYS,
+    METER_LETTERS,
     SimulationError,
+    _correction,
+    _delivered_at,
+    _first_delivery,
     allocate,
     community_totals,
     consumption_series,
+    correction_lag_days,
     day_intervals,
+    delay_days,
+    deliveries_for,
     generation_series,
+    is_corrected,
+    is_missing,
+    meter_history,
+    meter_id_on,
+    registrations,
     rng,
     simulate_day,
     surplus,
@@ -197,3 +213,143 @@ def test_a_full_day_returns_an_allocation_for_every_consuming_member():
 
 def test_the_community_total_is_the_sum_of_its_members():
     assert community_totals(flat(1.0, 3.0)) == (4.0,)
+
+
+# --- delivery: late, corrected, incomplete ---------------------------------------------------
+
+REGISTRY = (HOUSE, SHOP, PLANT)
+RUN_DAY = date(2025, 3, 5)
+
+
+def wide_profiles():
+    """Flat profiles covering every day a run can reach back into."""
+    days = [RUN_DAY - timedelta(days=back) for back in range(MAX_LOOKBACK_DAYS + 2)]
+    intervals = [interval for day in days for interval in day_intervals(day)]
+    return {
+        "H0": dict.fromkeys(intervals, 0.03),
+        GENERATION_PROFILE: dict.fromkeys(intervals, 0.05),
+    }
+
+
+def test_a_run_delivers_the_same_messages_every_time():
+    one = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED)
+    other = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED)
+    assert [encode(d.payload) for d in one] == [encode(d.payload) for d in other]
+
+
+def test_a_run_always_carries_the_community_aggregate_for_yesterday():
+    deliveries = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED)
+    community = [d for d in deliveries if d.key == COMMUNITY_KEY]
+    assert len(community) == 1
+    assert community[0].payload["interval_start"] == utc_text(
+        day_intervals(RUN_DAY - timedelta(days=1))[0]
+    )
+
+
+def test_a_run_never_carries_a_member_who_is_not_ours():
+    deliveries = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED)
+    assert SHOP.metering_point not in {d.key for d in deliveries}
+    assert PLANT.metering_point not in {d.key for d in deliveries}
+
+
+def test_a_registry_with_none_of_our_customers_is_refused():
+    with pytest.raises(SimulationError, match="none of our customers"):
+        deliveries_for(RUN_DAY, (SHOP, PLANT), wide_profiles(), SEED)
+
+
+def test_every_message_a_run_produces_passes_the_validation_it_will_meet():
+    for delivery in deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED):
+        assert readings_of(decode(encode(delivery.payload)))
+
+
+def test_a_delivery_lands_the_morning_after_the_consumption_day_plus_its_delay():
+    point, day = HOUSE.metering_point, date(2025, 3, 4)
+    landing = _delivered_at(day, delay_days(point, day, SEED))
+    assert landing.astimezone(VIENNA).hour == 3
+    assert landing.astimezone(VIENNA).minute == 30
+    assert landing.astimezone(VIENNA).date() == day + timedelta(
+        days=1 + delay_days(point, day, SEED)
+    )
+
+
+def test_the_delay_of_a_point_day_never_depends_on_when_it_is_asked():
+    point, day = HOUSE.metering_point, date(2025, 3, 4)
+    assert delay_days(point, day, SEED) == delay_days(point, day, SEED)
+    assert 0 <= delay_days(point, day, SEED) <= max(LATE_DAYS)
+
+
+def test_a_correction_carries_a_higher_version_and_leaves_the_rest_untouched():
+    point, day = _a_corrected_point_day()
+    intervals, consumption, allocated, _ = simulate_day(day, REGISTRY, wide_profiles(), SEED)
+    correction = _correction(HOUSE, day, intervals, consumption, allocated, SEED)
+
+    assert correction is not None
+    assert correction.payload["version"] == 2
+    touched = [value for value in correction.payload["consumption"] if value is not None]
+    assert 0 < len(touched) < len(intervals)
+
+
+def test_a_correction_disagrees_with_the_first_delivery_it_replaces():
+    point, day = _a_corrected_point_day()
+    intervals, consumption, allocated, _ = simulate_day(day, REGISTRY, wide_profiles(), SEED)
+    first = _first_delivery(HOUSE, day, intervals, consumption, allocated, SEED)
+    correction = _correction(HOUSE, day, intervals, consumption, allocated, SEED)
+
+    differences = [
+        position
+        for position, value in enumerate(correction.payload["consumption"])
+        if value is not None and value != first.payload["consumption"][position]
+    ]
+    assert differences, "a correction that changes nothing is not a correction"
+
+
+def test_a_correction_arrives_after_the_delivery_it_corrects():
+    point, day = _a_corrected_point_day()
+    first = _delivered_at(day, delay_days(point, day, SEED))
+    later = _delivered_at(day, delay_days(point, day, SEED) + correction_lag_days(point, day, SEED))
+    assert later > first
+
+
+def _a_corrected_point_day():
+    """Find a day the household's first delivery is wrong on, so the case can be tested."""
+    point = HOUSE.metering_point
+    for back in range(400):
+        day = RUN_DAY - timedelta(days=back)
+        if is_corrected(point, day, SEED):
+            return point, day
+    raise AssertionError("no corrected point-day found, which makes the rate implausible")
+
+
+def test_an_absent_interval_is_left_absent_rather_than_zeroed():
+    day = date(2025, 3, 4)
+    intervals, consumption, allocated, _ = simulate_day(day, REGISTRY, wide_profiles(), SEED)
+    first = _first_delivery(HOUSE, day, intervals, consumption, allocated, SEED)
+    for position, value in enumerate(first.payload["consumption"]):
+        expected_absent = is_missing(HOUSE.metering_point, day, position, SEED)
+        assert (value is None) == expected_absent
+
+
+# --- meters -----------------------------------------------------------------------------------
+
+
+def test_a_meter_identifier_keeps_its_point_and_only_changes_its_letter():
+    served = meter_id_on(HOUSE, date(2025, 6, 1), SEED)
+    assert served.startswith(HOUSE.meter_id[:-1])
+    assert served[-1] in METER_LETTERS
+
+
+def test_the_meter_history_starts_on_the_day_the_point_was_registered():
+    history = meter_history(HOUSE, 2025, SEED)
+    assert history[0][0] == VALID_FROM.date()
+    assert [entry[0] for entry in history] == sorted(entry[0] for entry in history)
+
+
+def test_a_meter_that_was_never_exchanged_has_one_entry():
+    never = [member for member in (HOUSE, SHOP) if len(meter_history(member, 2025, SEED)) == 1]
+    assert never, "with a 2% yearly rate at least one of two points keeps its meter"
+
+
+def test_registrations_only_ever_cover_our_own_points():
+    grouped = registrations(REGISTRY, 2025, SEED)
+    registered = {member.metering_point for group in grouped.values() for member in group}
+    assert registered == {HOUSE.metering_point}

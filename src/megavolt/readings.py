@@ -99,8 +99,8 @@ def reading_batch(
         "metering_point": metering_point,
         "meter_id": meter_id,
         "version": version,
-        "delivered_at": _utc_text(delivered_at),
-        "interval_start": _utc_text(interval_start),
+        "delivered_at": utc_text(delivered_at),
+        "interval_start": utc_text(interval_start),
         "resolution_minutes": RESOLUTION_MINUTES,
         "consumption": list(consumption),
         "allocated": list(allocated),
@@ -118,8 +118,8 @@ def community_batch(
     return {
         "schema": COMMUNITY_SCHEMA,
         "version": version,
-        "delivered_at": _utc_text(delivered_at),
-        "interval_start": _utc_text(interval_start),
+        "delivered_at": utc_text(delivered_at),
+        "interval_start": utc_text(interval_start),
         "resolution_minutes": RESOLUTION_MINUTES,
         "generation": list(generation),
         "consumption": list(consumption),
@@ -317,7 +317,7 @@ def _expect_same_length(
         )
 
 
-def _utc_text(moment: datetime) -> str:
+def utc_text(moment: datetime) -> str:
     """Render a timestamp the one way, so identical content encodes to identical bytes."""
     if moment.tzinfo is None:
         raise MessageError(f"refusing to send the naive timestamp {moment!r}")
