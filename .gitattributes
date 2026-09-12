@@ -1,2 +1,7 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
+
+# Keep every file out of GitHub's language statistics, which hides the language bar on the
+# repository page. linguist-vendored changes the statistics only; linguist-generated would also
+# collapse files in pull request diffs, which is exactly where they need to be read.
+* linguist-vendored
