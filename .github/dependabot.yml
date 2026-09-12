@@ -1,0 +1,66 @@
+# Dependabot opens pull requests for outdated dependencies. Nothing merges on its own: every
+# update goes through CI and a human review like any other change.
+version: 2
+
+updates:
+  # The laptop's Python environment. confluent-kafka, psycopg and python-dotenv are pinned to
+  # the Airflow constraints file, and a bump Airflow has not made breaks the image build, so
+  # they move only together with a deliberate Airflow upgrade.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: confluent-kafka
+      - dependency-name: psycopg
+      - dependency-name: psycopg-binary
+      - dependency-name: python-dotenv
+    groups:
+      python-minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The same packages as installed into the Airflow image, with the same constraint.
+  - package-ecosystem: pip
+    directory: /airflow
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: confluent-kafka
+      - dependency-name: psycopg
+      - dependency-name: python-dotenv
+    groups:
+      airflow-image-minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # The Airflow base image is ignored: its version is repeated in the pip install line and in
+  # the constraints file URL, and bumping only the FROM line leaves a mismatched image.
+  # Airflow upgrades are a manual task.
+  - package-ecosystem: docker
+    directory: /airflow
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: apache/airflow
+
+  # Warehouse and broker images, kept pinned by digest. A major TimescaleDB or Postgres version
+  # cannot read a data volume written by the previous one, so majors are never proposed.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: timescale/timescaledb
+        update-types: [version-update:semver-major]
+
+  # Actions are pinned to commit SHAs; Dependabot moves the SHA and the version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
