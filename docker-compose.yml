@@ -155,6 +155,27 @@ services:
       redpanda:
         condition: service_healthy
 
+  # Reads meter.readings.v1 into the warehouse, all the time. Reuses the Airflow image because it
+  # already carries the megavolt package, but not the Airflow environment: its own environment
+  # below holds the two addresses it needs and no other secret (T39).
+  meter-consumer:
+    image: megavolt/airflow:3.3.1
+    container_name: megavolt-meter-consumer
+    restart: unless-stopped
+    command: python -m megavolt.consumer
+    environment:
+      WAREHOUSE_DSN: >-
+        postgresql://megavolt_writer:${WAREHOUSE_WRITER_PASSWORD:?set WAREHOUSE_WRITER_PASSWORD in .env}@warehouse:5432/${POSTGRES_DB}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    # A batch can take several seconds to write. The consumer finishes it on SIGTERM, and the
+    # default 10 s would kill it mid-batch - harmless thanks to the commit order, but noisy.
+    stop_grace_period: 30s
+    depends_on:
+      warehouse:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+
 volumes:
   warehouse_data:
   airflow_db_data:
