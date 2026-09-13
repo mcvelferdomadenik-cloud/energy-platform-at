@@ -2,7 +2,7 @@
 
 Everything here is derived from one seed, so the same seed always produces the same registry.
 The simulator knows all 600 members because the community does; the pipeline only ever sees the
-350 that are ours plus the community aggregates (D20).
+350 that are ours plus the community aggregates.
 
 Metering point identifiers follow the Austrian Zählpunktbezeichnung: 33 characters, `AT` plus a
 six-digit grid operator number, plus the four-digit postal code padded to five, plus twenty

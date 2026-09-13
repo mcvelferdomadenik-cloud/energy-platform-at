@@ -6,10 +6,10 @@ The order of three steps is the whole design:
 
 A crash anywhere before the offset commit replays the batch, and `ON CONFLICT DO NOTHING`
 absorbs the replay. Committing offsets any earlier would lose a delivery day with nothing to
-show it was ever missing (T42).
+show it was ever missing.
 
 A message that fails validation will never pass it, so it goes to the dead-letter topic and the
-offset moves on (T43). A database that cannot be reached will come back, so that is retried,
+offset moves on. A database that cannot be reached will come back, so that is retried,
 and if it does not come back the consumer crashes loudly. The two are never handled alike.
 """
 
@@ -130,7 +130,7 @@ def with_retries[T](
 
 
 def _send_dead_letters(producer, letters: list[DeadLetter]) -> None:
-    """Write every dead letter and wait until the broker has them all, or stop (T44)."""
+    """Write every dead letter and wait until the broker has them all, or stop."""
     if not letters:
         return
 

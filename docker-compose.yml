@@ -115,7 +115,7 @@ services:
 
   # dev-container mode runs a single broker with no authentication at all, which is why only
   # the loopback port is published: anything that can reach 19092 can read every meter reading
-  # in the cluster (T41). Two listeners because the addresses differ by who is asking -
+  # in the cluster. Two listeners because the addresses differ by who is asking -
   # containers resolve "redpanda", the laptop resolves 127.0.0.1.
   redpanda:
     image: redpandadata/redpanda:v26.2.2@sha256:468bd13a9f2bd24794cb7fddc867c767fb1008b9a07b297b89fde48c564d7d96
@@ -161,7 +161,7 @@ services:
 
   # Reads meter.readings.v1 into the warehouse, all the time. Reuses the Airflow image because it
   # already carries the megavolt package, but not the Airflow environment: its own environment
-  # below holds the two addresses it needs and no other secret (T39).
+  # below holds the two addresses it needs and no other secret.
   meter-consumer:
     image: megavolt/airflow:3.3.1
     container_name: megavolt-meter-consumer

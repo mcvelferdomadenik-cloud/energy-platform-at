@@ -192,7 +192,7 @@ def store_metering_points(points: Sequence[Member], valid_from: datetime) -> int
     """Register our own metering points and return how many rows were new.
 
     A supplier never receives the other members' metering points, so handing one to the
-    warehouse is a mistake worth failing on rather than a row worth writing (D20).
+    warehouse is a mistake worth failing on rather than a row worth writing.
     """
     if not points:
         raise WarehouseError("refusing to store an empty set of metering points")
@@ -235,7 +235,7 @@ def store_stream_batch(
     """Store one consumer batch in a single transaction and return the new rows per table.
 
     One transaction, because a batch that half-lands and then has its offsets committed is
-    exactly the silent loss the consumer's commit order exists to prevent (T42).
+    exactly the silent loss the consumer's commit order exists to prevent.
     """
     if not readings and not intervals:
         raise WarehouseError("refusing to store an empty batch")

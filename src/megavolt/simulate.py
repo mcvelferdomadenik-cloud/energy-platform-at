@@ -11,8 +11,8 @@ interval and forecasting our residual would be arithmetic rather than a problem.
 factors, per-interval jitter and per-day cloud cover are what make the residual worth modelling.
 
 Every multiplicative factor is drawn with mean exactly 1, so the annual totals stay on the figures
-signed off in D22 in expectation. They are not renormalised to hit them exactly: that would need
-the whole year simulated before any single day could be produced.
+chosen for the community in expectation. They are not renormalised to hit them exactly: that
+would need the whole year simulated before any single day could be produced.
 """
 
 from __future__ import annotations
