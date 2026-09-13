@@ -1,5 +1,6 @@
 # Direct dependencies of the megavolt package, pinned to the versions in uv.lock.
 # Keep in sync with pyproject.toml when a dependency changes.
+confluent-kafka==2.15.0
 defusedxml==0.7.1
 httpx==0.28.1
 psycopg[binary]==3.3.4

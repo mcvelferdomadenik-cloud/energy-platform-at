@@ -103,13 +103,85 @@ services:
     environment:
       <<: *airflow-env
       ENTSOE_API_TOKEN: ${ENTSOE_API_TOKEN:?set ENTSOE_API_TOKEN in .env}
+      # meter_stream_daily runs here. The seed must be the one the laptop uses, or a scheduled
+      # day and a hand-run day would produce different readings for the same date.
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+      SIMULATOR_SEED: ${SIMULATOR_SEED:-megavolt}
 
   airflow-dag-processor:
     <<: *airflow-common
     container_name: megavolt-airflow-dag-processor
     command: dag-processor
 
+  # dev-container mode runs a single broker with no authentication at all, which is why only
+  # the loopback port is published: anything that can reach 19092 can read every meter reading
+  # in the cluster. Two listeners because the addresses differ by who is asking -
+  # containers resolve "redpanda", the laptop resolves 127.0.0.1.
+  redpanda:
+    image: redpandadata/redpanda:v26.2.2@sha256:468bd13a9f2bd24794cb7fddc867c767fb1008b9a07b297b89fde48c564d7d96
+    container_name: megavolt-redpanda
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+    ports:
+      - "127.0.0.1:19092:19092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # The dead-letter topic has to exist before the first unreadable message arrives, or that
+  # message is lost and the control it implements is worthless.
+  redpanda-init:
+    image: redpandadata/redpanda:v26.2.2@sha256:468bd13a9f2bd24794cb7fddc867c767fb1008b9a07b297b89fde48c564d7d96
+    container_name: megavolt-redpanda-init
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for topic in meter.readings.v1 meter.readings.dlq.v1; do
+          rpk topic create "$$topic" --brokers redpanda:9092 --partitions 3 --replicas 1 \
+            || rpk topic describe "$$topic" --brokers redpanda:9092 > /dev/null
+        done
+        rpk topic list --brokers redpanda:9092
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  # Reads meter.readings.v1 into the warehouse, all the time. Reuses the Airflow image because it
+  # already carries the megavolt package, but not the Airflow environment: its own environment
+  # below holds the two addresses it needs and no other secret.
+  meter-consumer:
+    image: megavolt/airflow:3.3.1
+    container_name: megavolt-meter-consumer
+    restart: unless-stopped
+    command: python -m megavolt.consumer
+    environment:
+      WAREHOUSE_DSN: >-
+        postgresql://megavolt_writer:${WAREHOUSE_WRITER_PASSWORD:?set WAREHOUSE_WRITER_PASSWORD in .env}@warehouse:5432/${POSTGRES_DB}
+      KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
+    # A batch can take several seconds to write. The consumer finishes it on SIGTERM, and the
+    # default 10 s would kill it mid-batch - harmless thanks to the commit order, but noisy.
+    stop_grace_period: 30s
+    depends_on:
+      warehouse:
+        condition: service_healthy
+      redpanda-init:
+        condition: service_completed_successfully
+
 volumes:
   warehouse_data:
   airflow_db_data:
   airflow_logs:
+  redpanda_data:
