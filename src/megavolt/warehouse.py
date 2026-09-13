@@ -13,6 +13,7 @@ import psycopg
 from megavolt.apcs import ProfilePoint
 from megavolt.community import Member
 from megavolt.entsoe import PricePoint
+from megavolt.readings import CommunityReading, Reading
 
 DSN_ENV = "WAREHOUSE_DSN"
 
@@ -45,6 +46,24 @@ VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT DO NOTHING
 """
 
+_INSERT_METER_READING = """
+INSERT INTO raw.meter_reading
+    (metering_point, interval_start, consumption_kwh, allocated_kwh, meter_id,
+     version, delivered_at, source, payload_hash)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT DO NOTHING
+"""
+
+_INSERT_COMMUNITY_INTERVAL = """
+INSERT INTO raw.community_interval
+    (interval_start, generation_kwh, consumption_kwh, version, delivered_at,
+     source, payload_hash)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT DO NOTHING
+"""
+
+STREAM_SOURCE = "meter_stream"
+
 
 class WarehouseError(RuntimeError):
     """Raised when the warehouse cannot be reached or asked to store nonsense."""
@@ -64,6 +83,30 @@ def profile_payload_hash(point: ProfilePoint, profile_year: int) -> str:
     """Fingerprint one delivered profile value."""
     return _fingerprint(
         point.profile_type, point.interval_start.isoformat(), profile_year, point.value
+    )
+
+
+def reading_payload_hash(reading: Reading) -> str:
+    """Fingerprint one delivered reading. A correction changes it; a replay does not."""
+    return _fingerprint(
+        reading.metering_point,
+        reading.interval_start.isoformat(),
+        reading.consumption_kwh,
+        reading.allocated_kwh,
+        reading.meter_id,
+        reading.version,
+        reading.delivered_at.isoformat(),
+    )
+
+
+def community_payload_hash(interval: CommunityReading) -> str:
+    """Fingerprint one interval the community reported about itself."""
+    return _fingerprint(
+        interval.interval_start.isoformat(),
+        interval.generation_kwh,
+        interval.consumption_kwh,
+        interval.version,
+        interval.delivered_at.isoformat(),
     )
 
 
@@ -184,3 +227,52 @@ def store_metering_points(points: Sequence[Member], valid_from: datetime) -> int
     with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
         cursor.executemany(_INSERT_METERING_POINT, rows)
         return cursor.rowcount
+
+
+def store_stream_batch(
+    readings: Sequence[Reading], intervals: Sequence[CommunityReading]
+) -> tuple[int, int]:
+    """Store one consumer batch in a single transaction and return the new rows per table.
+
+    One transaction, because a batch that half-lands and then has its offsets committed is
+    exactly the silent loss the consumer's commit order exists to prevent (T42).
+    """
+    if not readings and not intervals:
+        raise WarehouseError("refusing to store an empty batch")
+
+    reading_rows = [
+        (
+            reading.metering_point,
+            reading.interval_start,
+            reading.consumption_kwh,
+            reading.allocated_kwh,
+            reading.meter_id,
+            reading.version,
+            reading.delivered_at,
+            STREAM_SOURCE,
+            reading_payload_hash(reading),
+        )
+        for reading in readings
+    ]
+    interval_rows = [
+        (
+            interval.interval_start,
+            interval.generation_kwh,
+            interval.consumption_kwh,
+            interval.version,
+            interval.delivered_at,
+            STREAM_SOURCE,
+            community_payload_hash(interval),
+        )
+        for interval in intervals
+    ]
+
+    stored_readings = stored_intervals = 0
+    with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
+        if reading_rows:
+            cursor.executemany(_INSERT_METER_READING, reading_rows)
+            stored_readings = cursor.rowcount
+        if interval_rows:
+            cursor.executemany(_INSERT_COMMUNITY_INTERVAL, interval_rows)
+            stored_intervals = cursor.rowcount
+    return stored_readings, stored_intervals
