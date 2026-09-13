@@ -495,6 +495,36 @@ def _profiles_for(run_day: date, members: tuple[Member, ...]):
     return profiles
 
 
+def _delivery_day(delivery_date: date) -> tuple[str, tuple[Member, ...], tuple[Delivery, ...]]:
+    """Everything one delivery day sends, computed from the seed and the stored profiles."""
+    from megavolt.community import members as registry
+    from megavolt.community import seed as default_seed
+
+    seed = default_seed()
+    people = registry(seed)
+    profiles = _profiles_for(delivery_date, people)
+    return seed, people, deliveries_for(delivery_date, people, profiles, seed)
+
+
+def deliver(delivery_date: date) -> tuple[int, int]:
+    """Register our metering points, then produce one delivery day into Redpanda.
+
+    The command line and the daily DAG both call this, so a scheduled run and a hand-run day
+    cannot drift apart. Registration comes first and runs every time: a reading whose point is
+    not registered drops out of staging, and a repeated registration inserts nothing.
+    Returns the new registry rows and the number of messages produced.
+    """
+    from megavolt.warehouse import store_metering_points
+
+    seed, people, deliveries = _delivery_day(delivery_date)
+    registered = sum(
+        store_metering_points(group, valid_from)
+        for valid_from, group in sorted(registrations(people, delivery_date.year, seed).items())
+    )
+    _produce(deliveries)
+    return registered, len(deliveries)
+
+
 def main() -> None:
     """Produce one delivery day into Redpanda, or print it and send nothing."""
     import argparse
@@ -502,9 +532,6 @@ def main() -> None:
     from dotenv import load_dotenv
 
     load_dotenv()
-
-    from megavolt.community import members as registry
-    from megavolt.community import seed as default_seed
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -516,32 +543,16 @@ def main() -> None:
     parser.add_argument(
         "--dry-run", action="store_true", help="print what would be sent and send nothing"
     )
-    parser.add_argument(
-        "--register", action="store_true", help="register our metering points before producing"
-    )
     arguments = parser.parse_args()
 
-    seed = default_seed()
-    people = registry(seed)
-    profiles = _profiles_for(arguments.delivery_date, people)
-    deliveries = deliveries_for(arguments.delivery_date, people, profiles, seed)
-
-    if arguments.register:
-        from megavolt.warehouse import store_metering_points
-
-        stored = sum(
-            store_metering_points(group, valid_from)
-            for valid_from, group in sorted(
-                registrations(people, arguments.delivery_date.year, seed).items()
-            )
-        )
-        print(f"registered {stored} new metering point rows")
-
     if arguments.dry_run:
+        _, _, deliveries = _delivery_day(arguments.delivery_date)
         _print(arguments.delivery_date, deliveries)
         return
 
-    _produce(deliveries)
+    registered, produced = deliver(arguments.delivery_date)
+    print(f"registered {registered} new metering point rows")
+    print(f"produced {produced} messages to {READINGS_TOPIC}")
 
 
 def _print(run_day: date, deliveries: tuple[Delivery, ...]) -> None:
@@ -594,7 +605,6 @@ def _produce(deliveries: tuple[Delivery, ...]) -> None:
         raise SimulationError(f"{remaining} messages were never acknowledged")
     if failures:
         raise SimulationError(f"{len(failures)} messages failed: {failures[0]}")
-    print(f"produced {len(deliveries)} messages to {READINGS_TOPIC}")
 
 
 if __name__ == "__main__":
