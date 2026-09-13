@@ -1,0 +1,39 @@
+# Secret scanning for this repository, used by the pre-commit hook and by CI.
+#
+# gitleaks' built-in rules recognise known token formats (GitHub, AWS, Slack and many more).
+# They deliberately ignore generic passwords to keep false positives down, and every
+# credential this project holds is exactly that: database passwords, a Fernet key, a JWT
+# secret, an API token. The two rules below cover them.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "megavolt-credential-assignment"
+description = "A password, secret, token or key assigned a literal value"
+regex = '''(?i)[a-z0-9_]*(?:password|passwd|secret|token|fernet_key|api_key)[a-z0-9_]*["']?[ \t]*[:=][ \t]*["']?([^\s"'$<>{}()\[\]&]{12,})'''
+secretGroup = 1
+keywords = ["password", "passwd", "secret", "token", "fernet_key", "api_key"]
+
+[[rules]]
+id = "megavolt-connection-string-password"
+description = "A password embedded in a connection string"
+regex = '''(?i)\b[a-z][a-z0-9+.-]*://[^:/\s@]+:([^@\s/$]{4,})@'''
+secretGroup = 1
+keywords = ["://"]
+
+# Values these two rules would otherwise report that are not secrets. Each entry is a shape,
+# not a specific string, so a real secret cannot be waved through by matching one by accident.
+[[allowlists]]
+description = "Documented placeholders and names that stand in for a value"
+targetRules = ["megavolt-credential-assignment", "megavolt-connection-string-password"]
+regexTarget = "secret"
+regexes = [
+    '''^CHANGEME$''',
+    # The name of an environment variable, e.g. TOKEN_ENV = "ENTSOE_API_TOKEN".
+    '''^[A-Z][A-Z0-9_]*$''',
+    # A lowercase identifier, e.g. a psql variable in PASSWORD :'writer_password'.
+    '''^[a-z_]+$''',
+    # A dotted name in code, e.g. token = os.environ.get(TOKEN_ENV).
+    '''^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+$''',
+]
