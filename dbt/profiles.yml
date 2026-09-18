@@ -1,0 +1,15 @@
+# No values here, only names of environment variables; the values live in .env.
+# From the laptop the warehouse is 127.0.0.1:5433; inside Docker, Compose sets WAREHOUSE_HOST/PORT.
+megavolt:
+  target: warehouse
+  outputs:
+    warehouse:
+      type: postgres
+      host: "{{ env_var('WAREHOUSE_HOST', '127.0.0.1') }}"
+      port: "{{ env_var('WAREHOUSE_PORT', '5433') | as_number }}"
+      user: megavolt_dbt
+      password: "{{ env_var('WAREHOUSE_DBT_PASSWORD') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'megavolt') }}"
+      schema: staging
+      threads: 4
+      connect_timeout: 10

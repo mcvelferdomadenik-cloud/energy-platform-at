@@ -1,0 +1,120 @@
+version: 2
+
+# Every test is an error. A test may be `warn` only with a comment above it saying why.
+
+models:
+  - name: stg_metering_point
+    description: Our metering points, one row per registration, each valid until the next.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, valid_from]
+    columns:
+      - name: metering_point
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_match_regex:
+              arguments:
+                regex: "^AT[0-9A-Z]{31}$"
+      - name: segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [household, business, municipality]
+      - name: annual_kwh
+        data_tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+                strictly: true
+
+  - name: stg_meter_reading
+    description: One true reading per metering point per quarter hour, with its registration.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, interval_start]
+      - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
+          arguments:
+            column_A: consumption_kwh
+            column_B: allocated_kwh
+            or_equal: true
+    columns:
+      - name: consumption_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+      - name: allocated_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+      - name: version
+        data_tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 1
+      - name: meter_matches_registry
+        data_tests:
+          # warn, not error: a reading sent under the old meter id after a swap is a data-quality
+          # finding about the sender, kept and flagged, not a reason to stop the pipeline.
+          - accepted_values:
+              arguments:
+                values: [true]
+              config:
+                severity: warn
+
+  - name: stg_community_interval
+    description: Community generation and consumption per quarter hour, latest version.
+    columns:
+      - name: interval_start
+        data_tests: [unique, not_null]
+      - name: generation_kwh
+        data_tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+      - name: consumption_kwh
+        data_tests:
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+
+  - name: stg_day_ahead_price
+    description: One day-ahead price per bidding zone and interval.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [bidding_zone, interval_start]
+    columns:
+      - name: bidding_zone
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ["10YAT-APG------L"]
+      - name: price_eur_mwh
+        data_tests:
+          - not_null
+          # The harmonised clearing price limits of the EU coupled day-ahead market (SDAC):
+          # -500 and +4000 EUR/MWh. A value outside them is not a price.
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: -500
+                max_value: 4000
+
+  - name: stg_load_profile
+    description: Official APCS synthetic load profiles, one value per profile and interval.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [profile_type, interval_start]
+    columns:
+      - name: value
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0

@@ -1,0 +1,45 @@
+version: 2
+
+# Every test is an error. A test may be `warn` only with a comment above it saying why.
+
+models:
+  - name: dim_metering_point
+    description: Our customers as registered today, pseudonymous.
+    columns:
+      - name: metering_point
+        data_tests: [unique, not_null]
+      - name: segment
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [household, business, municipality]
+
+  - name: fct_customer_day
+    description: Per customer and Austrian day - completeness, consumption, allocation, residual.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, delivery_day]
+      - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
+          arguments:
+            column_A: intervals_expected
+            column_B: intervals_received
+            or_equal: true
+      - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
+          arguments:
+            column_A: consumption_kwh
+            column_B: allocated_kwh
+            or_equal: true
+    columns:
+      - name: intervals_expected
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [92, 96, 100]
+                quote: false
+      - name: residual_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0

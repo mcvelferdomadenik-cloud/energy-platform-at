@@ -21,7 +21,7 @@ right away. Every number comes from the program, not from someone's spreadsheet.
 - Real Austrian electricity prices, collected every day
 - An energy community of 600 members, 350 of them our customers
 - Their meter readings, arriving as messily as real ones do: late, corrected, incomplete
-- One value we can trust for every customer and every quarter hour
+- One value we can trust for every customer and every quarter hour, checked every morning
 
 Next: what each customer really costs us, and then the pricing program itself, which will be hidden because we don't want our competitors knowing too much :)
 

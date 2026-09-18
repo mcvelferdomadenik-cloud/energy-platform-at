@@ -1,4 +1,4 @@
-"""The winner rule in db/queries/stg_meter_reading.sql, proved against a real Postgres.
+"""The winner rule in the dbt model stg_meter_reading, proved against a real Postgres.
 
 Every case gets its own hand-written rows, because the simulator's data only exercises some of them
 by chance. The rows are inserted inside a transaction that is always rolled back, so raw is never
@@ -8,6 +8,7 @@ changed. Needs the running warehouse, so it is skipped unless WAREHOUSE_DSN is s
 """
 
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -20,9 +21,17 @@ import psycopg  # noqa: E402
 
 from megavolt.warehouse import dsn  # noqa: E402
 
-QUERY = (
-    Path(__file__).resolve().parents[1] / "db" / "queries" / "stg_meter_reading.sql"
-).read_text(encoding="utf-8")
+MODELS = Path(__file__).resolve().parents[1] / "dbt" / "models" / "staging"
+
+
+def rendered(model: str) -> str:
+    """The model's SQL with source() and ref() resolved by hand, so no dbt run is needed."""
+    sql = (MODELS / f"{model}.sql").read_text(encoding="utf-8")
+    sql = re.sub(r"\{\{\s*source\('raw',\s*'(\w+)'\)\s*\}\}", r"raw.\1", sql)
+    return re.sub(r"\{\{\s*ref\('(\w+)'\)\s*\}\}", lambda m: f"({rendered(m.group(1))})", sql)
+
+
+QUERY = rendered("stg_meter_reading")
 
 POINT = "AT09999908430TESTTESTTESTTESTTEST"
 STRANGER = "AT09999908430STRANGERSTRANGERSTR"
