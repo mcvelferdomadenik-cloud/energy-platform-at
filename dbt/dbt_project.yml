@@ -1,0 +1,25 @@
+name: megavolt
+version: "1.0.0"
+profile: megavolt
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+clean-targets: ["target", "dbt_packages"]
+
+flags:
+  # No usage reports leave the scheduler.
+  send_anonymous_usage_stats: false
+
+vars:
+  # Required by dbt_expectations (via dbt_date). Business days are Austrian days.
+  "dbt_date:time_zone": "Europe/Vienna"
+
+models:
+  megavolt:
+    # raw is append-only, so a view over it is always current and never needs a rebuild.
+    staging:
+      +schema: staging
+      +materialized: view
+    marts:
+      +schema: marts
+      +materialized: table

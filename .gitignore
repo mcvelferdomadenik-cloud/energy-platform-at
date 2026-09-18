@@ -42,3 +42,6 @@ logs/
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# dbt anonymous usage id, per machine
+dbt/.user.yml

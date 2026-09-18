@@ -41,6 +41,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       WAREHOUSE_WRITER_PASSWORD: ${WAREHOUSE_WRITER_PASSWORD:?set WAREHOUSE_WRITER_PASSWORD in .env}
+      WAREHOUSE_DBT_PASSWORD: ${WAREHOUSE_DBT_PASSWORD:?set WAREHOUSE_DBT_PASSWORD in .env}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
@@ -107,6 +108,11 @@ services:
       # day and a hand-run day would produce different readings for the same date.
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       SIMULATOR_SEED: ${SIMULATOR_SEED:-megavolt}
+      # dbt_build runs here too, as its own database role (db/init/03_dbt_role.sh).
+      WAREHOUSE_HOST: warehouse
+      WAREHOUSE_PORT: "5432"
+      WAREHOUSE_DBT_PASSWORD: ${WAREHOUSE_DBT_PASSWORD:?set WAREHOUSE_DBT_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
 
   airflow-dag-processor:
     <<: *airflow-common

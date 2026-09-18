@@ -1,0 +1,12 @@
+version: 2
+
+sources:
+  - name: raw
+    description: What actually arrived. Append-only; a correction is a new row, never an update.
+    schema: raw
+    tables:
+      - name: day_ahead_price
+      - name: load_profile
+      - name: metering_point
+      - name: meter_reading
+      - name: community_interval

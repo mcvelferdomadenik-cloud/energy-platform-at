@@ -44,7 +44,15 @@ ignore = ["S101"] # assert is fine in tests
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
 
+[tool.uv]
+# The dbt group is installed by default so `uv run dbt` works on the laptop; the Airflow image
+# installs the same group from airflow/requirements-dbt.txt with hashes.
+default-groups = ["dev", "dbt"]
+
 [dependency-groups]
+dbt = [
+    "dbt-postgres==1.11.0",
+]
 dev = [
     "pytest>=9.1.1",
     "ruff>=0.16.6",

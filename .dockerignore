@@ -9,6 +9,11 @@ __pycache__
 data/
 try_*.py
 
+# dbt build products; the image runs dbt deps itself
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
 # Internal documents, same rule as .gitignore
 CLAUDE.md
 PROJECT_PLAN.md
