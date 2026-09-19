@@ -58,3 +58,10 @@ def test_no_tracked_file_carries_an_internal_decision_or_threat_number():
         if INTERNAL_ID.search(line)
     ]
     assert not hits, hits
+
+
+def test_the_dependabot_config_uses_no_yaml_anchors_or_aliases():
+    """Dependabot refuses them ("YAML aliases are not supported") and then does nothing at all."""
+    text = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+    code = [line.split("#", 1)[0] for line in text.splitlines()]
+    assert not [line for line in code if re.search(r"(:\s*[&*]\w)|(-\s*[&*]\w)|(<<:)", line)]
