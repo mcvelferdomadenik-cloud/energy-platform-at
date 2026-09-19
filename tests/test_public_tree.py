@@ -11,7 +11,7 @@ MAY_NAME_PRIVATE_DOCUMENTS = {".gitignore", ".dockerignore", "tests/test_public_
 # Working notes number their decisions and threats with a letter and a number. Those numbers mean
 # nothing to a reader here and point at documents that are not published.
 INTERNAL_ID = re.compile(r"\b[DT][0-9]{1,2}\b")
-LOCK_FILES = {"uv.lock", "airflow/requirements-dbt.txt", "dbt/package-lock.yml"}
+LOCK_FILES = {"uv.lock", "dbt/package-lock.yml"}
 
 
 def tracked_text_files() -> list[tuple[str, str]]:

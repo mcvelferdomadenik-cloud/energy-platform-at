@@ -1,5 +1,7 @@
 # Dependabot opens pull requests for outdated dependencies. Nothing merges on its own: every
 # update goes through CI and a human review like any other change.
+# Version updates come once a month, grouped, so they are one review and not a stream. Security
+# updates do not follow this schedule: a known vulnerability opens a pull request at once.
 version: 2
 
 updates:
@@ -9,7 +11,7 @@ updates:
   - package-ecosystem: uv
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
     ignore:
       - dependency-name: confluent-kafka
@@ -25,7 +27,7 @@ updates:
   - package-ecosystem: pip
     directory: /airflow
     schedule:
-      interval: weekly
+      interval: monthly
     open-pull-requests-limit: 5
     ignore:
       - dependency-name: confluent-kafka
@@ -42,7 +44,7 @@ updates:
   - package-ecosystem: docker
     directory: /airflow
     schedule:
-      interval: weekly
+      interval: monthly
     ignore:
       - dependency-name: apache/airflow
 
@@ -51,7 +53,7 @@ updates:
   - package-ecosystem: docker-compose
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     ignore:
       - dependency-name: timescale/timescaledb
         update-types: [version-update:semver-major]
@@ -60,7 +62,7 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       actions:
         patterns: ["*"]

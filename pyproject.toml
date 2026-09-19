@@ -46,7 +46,7 @@ addopts = "-q --strict-markers"
 
 [tool.uv]
 # The dbt group is installed by default so `uv run dbt` works on the laptop; the Airflow image
-# installs the same group from airflow/requirements-dbt.txt with hashes.
+# installs the same group from this lock file, hashes and all.
 default-groups = ["dev", "dbt"]
 
 [dependency-groups]
