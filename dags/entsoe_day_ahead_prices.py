@@ -29,7 +29,9 @@ def entsoe_day_ahead_prices():
     @task
     def fetch_and_store(**context) -> int:
         """Fetch the next delivery day and write it to raw.day_ahead_price."""
-        run_day = context["logical_date"].in_timezone(VIENNA).start_of("day")
+        # A manual run has no logical_date in Airflow 3, only run_after, which is a plain datetime.
+        moment = pendulum.instance(context.get("logical_date") or context["dag_run"].run_after)
+        run_day = moment.in_timezone(VIENNA).start_of("day")
         delivery_day = run_day.add(days=1)
 
         prices = day_ahead_prices(delivery_day, delivery_day.add(days=1))

@@ -6,16 +6,20 @@ import pytest
 
 from megavolt.apcs import ProfilePoint
 from megavolt.community import VALID_FROM, members
-from megavolt.entsoe import PricePoint
+from megavolt.entsoe import ImbalancePricePoint, LoadPoint, PricePoint
 from megavolt.readings import CommunityReading, Reading
 from megavolt.warehouse import (
     WarehouseError,
     community_payload_hash,
     dsn,
+    imbalance_payload_hash,
+    load_payload_hash,
     payload_hash,
     profile_payload_hash,
     reading_payload_hash,
+    store_actual_load,
     store_day_ahead_prices,
+    store_imbalance_prices,
     store_load_profiles,
     store_metering_points,
     store_stream_batch,
@@ -149,3 +153,40 @@ def test_an_empty_stream_batch_is_refused_before_the_database_is_touched(monkeyp
     monkeypatch.delenv("WAREHOUSE_DSN", raising=False)
     with pytest.raises(WarehouseError, match="empty batch"):
         store_stream_batch([], [])
+
+
+# --- imbalance prices and actual load ----------------------------------------------------------
+
+IMBALANCE = ImbalancePricePoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), "A04", 103.75, "A01")
+LOAD = LoadPoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), 5429.2)
+
+
+def test_an_imbalance_price_that_becomes_final_is_a_new_delivery():
+    final = ImbalancePricePoint(IMBALANCE.interval_start, "A04", 103.75, "A02")
+    assert imbalance_payload_hash(ZONE, final) != imbalance_payload_hash(ZONE, IMBALANCE)
+
+
+def test_the_two_directions_of_one_interval_never_collide():
+    short = ImbalancePricePoint(IMBALANCE.interval_start, "A05", 103.75, "A01")
+    assert imbalance_payload_hash(ZONE, short) != imbalance_payload_hash(ZONE, IMBALANCE)
+
+
+def test_a_re_fetched_unchanged_imbalance_price_inserts_nothing():
+    again = ImbalancePricePoint(IMBALANCE.interval_start, "A04", 103.75, "A01")
+    assert imbalance_payload_hash(ZONE, again) == imbalance_payload_hash(ZONE, IMBALANCE)
+
+
+def test_a_revised_load_value_is_a_new_delivery_and_a_repeat_is_not():
+    assert load_payload_hash(ZONE, LoadPoint(LOAD.interval_start, 5429.2)) == load_payload_hash(
+        ZONE, LOAD
+    )
+    assert load_payload_hash(ZONE, LoadPoint(LOAD.interval_start, 5430.0)) != load_payload_hash(
+        ZONE, LOAD
+    )
+
+
+def test_storing_no_imbalance_prices_or_load_is_refused():
+    with pytest.raises(WarehouseError, match="empty set"):
+        store_imbalance_prices([], ZONE, timedelta(minutes=15))
+    with pytest.raises(WarehouseError, match="empty set"):
+        store_actual_load([], ZONE, timedelta(minutes=15))

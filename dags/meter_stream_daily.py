@@ -32,7 +32,9 @@ def meter_stream_daily():
     @task
     def produce_delivery_day(**context) -> int:
         """Register our metering points and produce everything that arrives on the run day."""
-        delivery_date = context["logical_date"].in_timezone(VIENNA).date()
+        # A manual run has no logical_date in Airflow 3, only run_after, which is a plain datetime.
+        moment = pendulum.instance(context.get("logical_date") or context["dag_run"].run_after)
+        delivery_date = moment.in_timezone(VIENNA).date()
         registered, produced = deliver(delivery_date)
         print(f"{delivery_date}: registered {registered} new rows, produced {produced} messages")
         return produced

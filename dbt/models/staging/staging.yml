@@ -105,6 +105,45 @@ models:
                 min_value: -500
                 max_value: 4000
 
+  - name: stg_imbalance_price
+    description: One imbalance price per control area, interval and direction; final beats intermediate.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [control_area, interval_start, category]
+    columns:
+      - name: direction
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [long, short]
+      - name: price_eur_mwh
+        data_tests:
+          - not_null
+          # The harmonised maximum and minimum balancing energy prices of the EU platforms:
+          # +/- 15000 EUR/MWh. An imbalance price outside them is not a price.
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: -15000
+                max_value: 15000
+
+  - name: stg_actual_load
+    description: Realised total load of the bidding zone per interval, in MW.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [bidding_zone, interval_start]
+    columns:
+      - name: load_mw
+        data_tests:
+          - not_null
+          # Plausibility only: Austria peaks around 12 GW, so 20 GW is a unit mix-up, not a load.
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+                max_value: 20000
+                strictly: true
+
   - name: stg_load_profile
     description: Official APCS synthetic load profiles, one value per profile and interval.
     data_tests:

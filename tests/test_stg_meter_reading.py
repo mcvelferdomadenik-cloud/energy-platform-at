@@ -8,9 +8,7 @@ changed. Needs the running warehouse, so it is skipped unless WAREHOUSE_DSN is s
 """
 
 import os
-import re
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -19,17 +17,8 @@ if not os.environ.get("WAREHOUSE_DSN"):
 
 import psycopg  # noqa: E402
 
+from dbt_sql import rendered  # noqa: E402
 from megavolt.warehouse import dsn  # noqa: E402
-
-MODELS = Path(__file__).resolve().parents[1] / "dbt" / "models" / "staging"
-
-
-def rendered(model: str) -> str:
-    """The model's SQL with source() and ref() resolved by hand, so no dbt run is needed."""
-    sql = (MODELS / f"{model}.sql").read_text(encoding="utf-8")
-    sql = re.sub(r"\{\{\s*source\('raw',\s*'(\w+)'\)\s*\}\}", r"raw.\1", sql)
-    return re.sub(r"\{\{\s*ref\('(\w+)'\)\s*\}\}", lambda m: f"({rendered(m.group(1))})", sql)
-
 
 QUERY = rendered("stg_meter_reading")
 

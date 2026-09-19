@@ -6,6 +6,8 @@ sources:
     schema: raw
     tables:
       - name: day_ahead_price
+      - name: imbalance_price
+      - name: actual_load
       - name: load_profile
       - name: metering_point
       - name: meter_reading

@@ -12,7 +12,7 @@ import psycopg
 
 from megavolt.apcs import ProfilePoint
 from megavolt.community import Member
-from megavolt.entsoe import PricePoint
+from megavolt.entsoe import ImbalancePricePoint, LoadPoint, PricePoint
 from megavolt.readings import CommunityReading, Reading
 
 DSN_ENV = "WAREHOUSE_DSN"
@@ -21,6 +21,43 @@ _INSERT_DAY_AHEAD_PRICE = """
 INSERT INTO raw.day_ahead_price
     (interval_start, bidding_zone, resolution, price_eur_mwh, source, payload_hash)
 VALUES (%s, %s, %s, %s, %s, %s)
+ON CONFLICT DO NOTHING
+"""
+
+# ENTSO-E revises these values, and a revision can go back to an earlier value (A, B, A). So a row
+# is stored when it differs from the LATEST stored row for its key, not from any earlier one:
+# comparing against all of history would drop the third delivery and leave B winning.
+# "Latest" is by received_at, so one clock must set it: the database. Only a test passes its own.
+_INSERT_IMBALANCE_PRICE = """
+INSERT INTO raw.imbalance_price
+    (interval_start, control_area, category, doc_status, resolution, price_eur_mwh,
+     source, received_at, payload_hash)
+SELECT %(interval_start)s::timestamptz, %(area)s::text, %(category)s::text, %(doc_status)s::text,
+       %(resolution)s::interval, %(price)s::double precision, 'entsoe',
+       coalesce(%(received_at)s::timestamptz, now()), %(payload_hash)s::text
+WHERE %(payload_hash)s::text IS DISTINCT FROM (
+    SELECT payload_hash FROM raw.imbalance_price
+    WHERE control_area = %(area)s::text
+      AND interval_start = %(interval_start)s::timestamptz
+      AND category = %(category)s::text
+    ORDER BY received_at DESC, payload_hash DESC
+    LIMIT 1
+)
+ON CONFLICT DO NOTHING
+"""
+
+_INSERT_ACTUAL_LOAD = """
+INSERT INTO raw.actual_load
+    (interval_start, bidding_zone, resolution, load_mw, source, received_at, payload_hash)
+SELECT %(interval_start)s::timestamptz, %(area)s::text, %(resolution)s::interval,
+       %(load)s::double precision, 'entsoe', coalesce(%(received_at)s::timestamptz, now()),
+       %(payload_hash)s::text
+WHERE %(payload_hash)s::text IS DISTINCT FROM (
+    SELECT payload_hash FROM raw.actual_load
+    WHERE bidding_zone = %(area)s::text AND interval_start = %(interval_start)s::timestamptz
+    ORDER BY received_at DESC, payload_hash DESC
+    LIMIT 1
+)
 ON CONFLICT DO NOTHING
 """
 
@@ -77,6 +114,22 @@ def _fingerprint(*fields: object) -> str:
 def payload_hash(bidding_zone: str, point: PricePoint) -> str:
     """Fingerprint one delivered price."""
     return _fingerprint(bidding_zone, point.interval_start.isoformat(), point.price_eur_mwh)
+
+
+def imbalance_payload_hash(control_area: str, point: ImbalancePricePoint) -> str:
+    """Fingerprint one delivered imbalance price. A status change alone is a new delivery."""
+    return _fingerprint(
+        control_area,
+        point.interval_start.isoformat(),
+        point.category,
+        point.doc_status,
+        point.price_eur_mwh,
+    )
+
+
+def load_payload_hash(bidding_zone: str, point: LoadPoint) -> str:
+    """Fingerprint one delivered load value."""
+    return _fingerprint(bidding_zone, point.interval_start.isoformat(), point.load_mw)
 
 
 def profile_payload_hash(point: ProfilePoint, profile_year: int) -> str:
@@ -139,6 +192,70 @@ def store_day_ahead_prices(
 
     with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
         cursor.executemany(_INSERT_DAY_AHEAD_PRICE, rows)
+        return cursor.rowcount
+
+
+def imbalance_rows(
+    points: Sequence[ImbalancePricePoint],
+    control_area: str,
+    resolution: timedelta,
+    received_at: datetime | None = None,
+) -> list[dict[str, object]]:
+    """One parameter set per imbalance price, for `_INSERT_IMBALANCE_PRICE`."""
+    return [
+        {
+            "interval_start": point.interval_start,
+            "area": control_area,
+            "category": point.category,
+            "doc_status": point.doc_status,
+            "resolution": resolution,
+            "price": point.price_eur_mwh,
+            "received_at": received_at,
+            "payload_hash": imbalance_payload_hash(control_area, point),
+        }
+        for point in points
+    ]
+
+
+def load_rows(
+    points: Sequence[LoadPoint],
+    bidding_zone: str,
+    resolution: timedelta,
+    received_at: datetime | None = None,
+) -> list[dict[str, object]]:
+    """One parameter set per load value, for `_INSERT_ACTUAL_LOAD`."""
+    return [
+        {
+            "interval_start": point.interval_start,
+            "area": bidding_zone,
+            "resolution": resolution,
+            "load": point.load_mw,
+            "received_at": received_at,
+            "payload_hash": load_payload_hash(bidding_zone, point),
+        }
+        for point in points
+    ]
+
+
+def store_imbalance_prices(
+    points: Sequence[ImbalancePricePoint], control_area: str, resolution: timedelta
+) -> int:
+    """Store the imbalance prices that changed since the last fetch and return how many did."""
+    if not points:
+        raise WarehouseError("refusing to store an empty set of imbalance prices")
+    rows = imbalance_rows(points, control_area, resolution)
+    with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
+        cursor.executemany(_INSERT_IMBALANCE_PRICE, rows)
+        return cursor.rowcount
+
+
+def store_actual_load(points: Sequence[LoadPoint], bidding_zone: str, resolution: timedelta) -> int:
+    """Store the load values that changed since the last fetch and return how many did."""
+    if not points:
+        raise WarehouseError("refusing to store an empty set of load values")
+    rows = load_rows(points, bidding_zone, resolution)
+    with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
+        cursor.executemany(_INSERT_ACTUAL_LOAD, rows)
         return cursor.rowcount
 
 

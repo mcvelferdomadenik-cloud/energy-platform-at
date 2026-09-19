@@ -91,3 +91,44 @@ CREATE TABLE raw.community_interval (
     timescaledb.hypertable,
     timescaledb.partition_column = 'interval_start'
 );
+
+-- Imbalance prices are revised for days after delivery: intermediate (A01) first, final (A02)
+-- later, so the status is part of the row. Both directions are kept (A04 long, A05 short),
+-- although Austria has priced them identically in every day checked so far.
+CREATE TABLE raw.imbalance_price (
+    interval_start timestamptz      NOT NULL,
+    control_area   text             NOT NULL,
+    category       text             NOT NULL,
+    doc_status     text             NOT NULL,
+    resolution     interval         NOT NULL,
+    price_eur_mwh  double precision NOT NULL,
+    source         text             NOT NULL DEFAULT 'entsoe',
+    received_at    timestamptz      NOT NULL DEFAULT now(),
+    payload_hash   text             NOT NULL,
+    -- received_at is in the key because a value can return to an earlier one (A, B, A), and the
+    -- third delivery must be kept: the latest row wins in staging.
+    PRIMARY KEY (control_area, interval_start, category, payload_hash, received_at),
+    -- An upper bound also refuses NaN, which Postgres sorts above every number.
+    CHECK (price_eur_mwh BETWEEN -100000 AND 100000),
+    CHECK (category IN ('A04', 'A05')),
+    CHECK (doc_status IN ('A01', 'A02'))
+) WITH (
+    timescaledb.hypertable,
+    timescaledb.partition_column = 'interval_start'
+);
+
+-- Actual total load of the bidding zone, in MW, as ENTSO-E publishes it.
+CREATE TABLE raw.actual_load (
+    interval_start timestamptz      NOT NULL,
+    bidding_zone   text             NOT NULL,
+    resolution     interval         NOT NULL,
+    load_mw        double precision NOT NULL,
+    source         text             NOT NULL DEFAULT 'entsoe',
+    received_at    timestamptz      NOT NULL DEFAULT now(),
+    payload_hash   text             NOT NULL,
+    PRIMARY KEY (bidding_zone, interval_start, payload_hash, received_at),
+    CHECK (load_mw >= 0 AND load_mw < 1000000)
+) WITH (
+    timescaledb.hypertable,
+    timescaledb.partition_column = 'interval_start'
+);
