@@ -132,3 +132,28 @@ CREATE TABLE raw.actual_load (
     timescaledb.hypertable,
     timescaledb.partition_column = 'interval_start'
 );
+
+-- Hourly weather for one point, from GeoSphere Austria (INCA analysis, CC BY 4.0). One row per
+-- parameter and hour. A missing hour is an absent row, never a zero. The analysis can be
+-- reprocessed, so received_at is in the key for the same reason as in raw.imbalance_price.
+CREATE TABLE raw.weather_observation (
+    valid_at     timestamptz      NOT NULL,
+    dataset      text             NOT NULL,
+    latitude     double precision NOT NULL,
+    longitude    double precision NOT NULL,
+    parameter    text             NOT NULL,
+    value        double precision NOT NULL,
+    source       text             NOT NULL DEFAULT 'geosphere',
+    received_at  timestamptz      NOT NULL DEFAULT now(),
+    payload_hash text             NOT NULL,
+    PRIMARY KEY (dataset, latitude, longitude, parameter, valid_at, payload_hash, received_at),
+    -- Each parameter has its own physical range, because raw is append-only: a row that gets
+    -- in cannot be taken out again. An upper bound also refuses NaN.
+    CONSTRAINT weather_value_in_range CHECK (
+        (parameter = 'T2M' AND value BETWEEN -60 AND 50)
+        OR (parameter = 'GL' AND value BETWEEN 0 AND 1400)
+    )
+) WITH (
+    timescaledb.hypertable,
+    timescaledb.partition_column = 'valid_at'
+);

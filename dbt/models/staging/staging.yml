@@ -144,6 +144,28 @@ models:
                 max_value: 20000
                 strictly: true
 
+  - name: stg_weather_hourly
+    description: Hourly temperature and global radiation per location. Source GeoSphere Austria, CC BY 4.0.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [dataset, latitude, longitude, valid_at]
+    columns:
+      - name: temperature_c
+        data_tests:
+          # Plausibility: the Austrian records are about -53 and +41 degrees.
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: -60
+                max_value: 50
+      - name: global_radiation_w_m2
+        data_tests:
+          # The sun delivers about 1361 W m-2 above the atmosphere; more on the ground is an error.
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+                max_value: 1400
+
   - name: stg_load_profile
     description: Official APCS synthetic load profiles, one value per profile and interval.
     data_tests:

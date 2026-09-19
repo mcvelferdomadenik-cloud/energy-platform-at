@@ -15,14 +15,26 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    # Version updates only: a name on its own would also silence security updates, and a known
+    # vulnerability in one of these is exactly what has to reach us, Airflow constraint or not.
     ignore:
       - dependency-name: confluent-kafka
+        update-types: &version-updates
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
       - dependency-name: defusedxml
+        update-types: *version-updates
       - dependency-name: httpx
+        update-types: *version-updates
       - dependency-name: psycopg
+        update-types: *version-updates
       - dependency-name: psycopg-binary
+        update-types: *version-updates
       - dependency-name: python-dotenv
+        update-types: *version-updates
       - dependency-name: tzdata
+        update-types: *version-updates
     groups:
       python-minor-and-patch:
         patterns: ["*"]
