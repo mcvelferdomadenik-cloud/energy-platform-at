@@ -68,6 +68,8 @@ def winning_price(cur) -> tuple[float, str]:
 def test_a_price_revised_back_to_its_first_value_ends_on_that_value(cursor):
     assert deliver_price(cursor, 100.0, "A01", FIRST) == 1
     assert deliver_price(cursor, 120.0, "A01", SECOND) == 1
+    # The revision wins while it is the latest, so a wrong sort order cannot pass by luck.
+    assert winning_price(cursor) == (120.0, "A01")
     assert deliver_price(cursor, 100.0, "A01", THIRD) == 1
     assert winning_price(cursor) == (100.0, "A01")
 

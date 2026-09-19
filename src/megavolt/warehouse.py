@@ -13,6 +13,7 @@ import psycopg
 from megavolt.apcs import ProfilePoint
 from megavolt.community import Member
 from megavolt.entsoe import ImbalancePricePoint, LoadPoint, PricePoint
+from megavolt.geosphere import WeatherPoint
 from megavolt.readings import CommunityReading, Reading
 
 DSN_ENV = "WAREHOUSE_DSN"
@@ -55,6 +56,25 @@ SELECT %(interval_start)s::timestamptz, %(area)s::text, %(resolution)s::interval
 WHERE %(payload_hash)s::text IS DISTINCT FROM (
     SELECT payload_hash FROM raw.actual_load
     WHERE bidding_zone = %(area)s::text AND interval_start = %(interval_start)s::timestamptz
+    ORDER BY received_at DESC, payload_hash DESC
+    LIMIT 1
+)
+ON CONFLICT DO NOTHING
+"""
+
+_INSERT_WEATHER = """
+INSERT INTO raw.weather_observation
+    (valid_at, dataset, latitude, longitude, parameter, value, source, received_at, payload_hash)
+SELECT %(valid_at)s::timestamptz, %(dataset)s::text, %(latitude)s::double precision,
+       %(longitude)s::double precision, %(parameter)s::text, %(value)s::double precision,
+       'geosphere', coalesce(%(received_at)s::timestamptz, now()), %(payload_hash)s::text
+WHERE %(payload_hash)s::text IS DISTINCT FROM (
+    SELECT payload_hash FROM raw.weather_observation
+    WHERE dataset = %(dataset)s::text
+      AND latitude = %(latitude)s::double precision
+      AND longitude = %(longitude)s::double precision
+      AND parameter = %(parameter)s::text
+      AND valid_at = %(valid_at)s::timestamptz
     ORDER BY received_at DESC, payload_hash DESC
     LIMIT 1
 )
@@ -130,6 +150,15 @@ def imbalance_payload_hash(control_area: str, point: ImbalancePricePoint) -> str
 def load_payload_hash(bidding_zone: str, point: LoadPoint) -> str:
     """Fingerprint one delivered load value."""
     return _fingerprint(bidding_zone, point.interval_start.isoformat(), point.load_mw)
+
+
+def weather_payload_hash(
+    dataset: str, latitude: float, longitude: float, point: WeatherPoint
+) -> str:
+    """Fingerprint one delivered weather value."""
+    return _fingerprint(
+        dataset, latitude, longitude, point.parameter, point.valid_at.isoformat(), point.value
+    )
 
 
 def profile_payload_hash(point: ProfilePoint, profile_year: int) -> str:
@@ -256,6 +285,41 @@ def store_actual_load(points: Sequence[LoadPoint], bidding_zone: str, resolution
     rows = load_rows(points, bidding_zone, resolution)
     with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
         cursor.executemany(_INSERT_ACTUAL_LOAD, rows)
+        return cursor.rowcount
+
+
+def weather_rows(
+    points: Sequence[WeatherPoint],
+    dataset: str,
+    latitude: float,
+    longitude: float,
+    received_at: datetime | None = None,
+) -> list[dict[str, object]]:
+    """One parameter set per weather value, for `_INSERT_WEATHER`."""
+    return [
+        {
+            "valid_at": point.valid_at,
+            "dataset": dataset,
+            "latitude": latitude,
+            "longitude": longitude,
+            "parameter": point.parameter,
+            "value": point.value,
+            "received_at": received_at,
+            "payload_hash": weather_payload_hash(dataset, latitude, longitude, point),
+        }
+        for point in points
+    ]
+
+
+def store_weather(
+    points: Sequence[WeatherPoint], dataset: str, latitude: float, longitude: float
+) -> int:
+    """Store the weather values that changed since the last fetch and return how many did."""
+    if not points:
+        raise WarehouseError("refusing to store an empty set of weather values")
+    rows = weather_rows(points, dataset, latitude, longitude)
+    with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
+        cursor.executemany(_INSERT_WEATHER, rows)
         return cursor.rowcount
 
 

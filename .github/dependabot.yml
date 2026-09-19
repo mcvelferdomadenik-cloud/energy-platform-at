@@ -5,38 +5,43 @@
 version: 2
 
 updates:
-  # The laptop's Python environment. confluent-kafka, psycopg and python-dotenv are pinned to
-  # the Airflow constraints file, and a bump Airflow has not made breaks the image build, so
-  # they move only together with a deliberate Airflow upgrade.
+  # The laptop's Python environment. Every runtime dependency is also installed into the Airflow
+  # image under the Airflow constraints file, which pins each of them to one exact version: a bump
+  # Airflow has not made cannot be resolved there and breaks the image build, while CI, which
+  # does not build the image, stays green. They move only with a deliberate Airflow upgrade.
+  # What is left for Dependabot here is the tooling: ruff, pytest and dbt.
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    # Version updates only: a name on its own would also silence security updates, and a known
+    # vulnerability in one of these is exactly what has to reach us, Airflow constraint or not.
     ignore:
       - dependency-name: confluent-kafka
+        update-types: &version-updates
+          - version-update:semver-major
+          - version-update:semver-minor
+          - version-update:semver-patch
+      - dependency-name: defusedxml
+        update-types: *version-updates
+      - dependency-name: httpx
+        update-types: *version-updates
       - dependency-name: psycopg
+        update-types: *version-updates
       - dependency-name: psycopg-binary
+        update-types: *version-updates
       - dependency-name: python-dotenv
+        update-types: *version-updates
+      - dependency-name: tzdata
+        update-types: *version-updates
     groups:
       python-minor-and-patch:
         patterns: ["*"]
         update-types: [minor, patch]
 
-  # The same packages as installed into the Airflow image, with the same constraint.
-  - package-ecosystem: pip
-    directory: /airflow
-    schedule:
-      interval: monthly
-    open-pull-requests-limit: 5
-    ignore:
-      - dependency-name: confluent-kafka
-      - dependency-name: psycopg
-      - dependency-name: python-dotenv
-    groups:
-      airflow-image-minor-and-patch:
-        patterns: ["*"]
-        update-types: [minor, patch]
+  # airflow/requirements.txt has no entry of its own: it repeats the runtime dependencies above at
+  # the versions in uv.lock, and tests/test_airflow_requirements.py keeps the two identical.
 
   # The Airflow base image is ignored: its version is repeated in the pip install line and in
   # the constraints file URL, and bumping only the FROM line leaves a mismatched image.

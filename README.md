@@ -22,7 +22,12 @@ right away. Every number comes from the program, not from someone's spreadsheet.
 - An energy community of 600 members, 350 of them our customers
 - Their meter readings, arriving as messily as real ones do: late, corrected, incomplete
 - One value we can trust for every customer and every quarter hour, checked every morning
+- What the grid charges us when we guess wrong, and the weather that makes us guess wrong
 
 Next: what each customer really costs us, and then the pricing program itself, which will be hidden because we don't want our competitors knowing too much :)
+
+Data: prices and load from the ENTSO-E Transparency Platform, load shapes from APCS, weather from
+[GeoSphere Austria](https://data.hub.geosphere.at) (INCA analysis,
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)).
 
 — Mark Cvelfer Domadenik

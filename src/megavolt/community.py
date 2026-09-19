@@ -33,6 +33,9 @@ DEFAULT_SEED = "megavolt"
 
 GRID_OPERATOR = "099999"
 POSTAL_CODE = "08430"
+# Where the weather is read: the centre of that postal area, two decimals, which is about a
+# kilometre. A village, not an address.
+LATITUDE, LONGITUDE = 46.78, 15.54
 METERING_POINT_LENGTH = 33
 
 VIENNA = ZoneInfo("Europe/Vienna")
