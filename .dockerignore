@@ -13,6 +13,7 @@ try_*.py
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/
+dbt/.user.yml
 
 # Internal documents, same rule as .gitignore
 CLAUDE.md
