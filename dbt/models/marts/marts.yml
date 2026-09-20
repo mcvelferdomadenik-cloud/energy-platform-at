@@ -144,3 +144,16 @@ models:
       - name: revision_eur
         data_tests:
           - not_null
+
+  - name: fct_forecast_comparison
+    description: Per forecast method and quarter hour - what the portfolio would have bought, delivered and paid; the difference between methods is what a better forecast is worth.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [forecast_method, interval_start]
+    columns:
+      - name: forecast_method
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [standard_profile, persistence]

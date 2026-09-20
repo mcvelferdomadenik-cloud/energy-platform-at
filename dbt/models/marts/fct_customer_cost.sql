@@ -25,43 +25,26 @@
     {'columns': ['interval_start']},
 ]) }}
 
-with price as (
+with purchase as (
 
-    select interval_start,
-           price_eur_mwh,
-           auction_resolution
-    from {{ ref('int_day_ahead_price_quarter_hour') }}
-
-),
-
-purchase as (
-
-    select forecast.metering_point,
-           forecast.interval_start,
-           forecast.forecast_residual_kwh,
-           price.price_eur_mwh       as day_ahead_price_eur_mwh,
-           price.auction_resolution,
-           -- The resolution is part of the period: an hour and a quarter hour that start together
-           -- would otherwise share one average.
-           avg(forecast.forecast_residual_kwh) over (
-               partition by forecast.metering_point,
-                            price.auction_resolution,
-                            date_bin(price.auction_resolution, forecast.interval_start,
-                                     timestamptz '2000-01-01 00:00:00+00')
-           ) as bought_kwh
-    from {{ ref('int_forecast_standard_profile') }} as forecast
-    join price using (interval_start)
+    -- The forecast we operate on is the standard profile, until a better one is chosen; what each
+    -- method would have cost is compared in fct_forecast_comparison. The rule that turns a forecast
+    -- into a purchase lives in int_purchase, for every method alike.
+    select metering_point,
+           interval_start,
+           forecast_method,
+           forecast_residual_kwh,
+           day_ahead_price_eur_mwh,
+           auction_resolution,
+           bought_kwh
+    from {{ ref('int_purchase') }}
+    where forecast_method = 'standard_profile'
 
 ),
 
 imbalance_price as (
 
-    select interval_start,
-           max(price_eur_mwh) filter (where direction = 'long')  as long_price_eur_mwh,
-           max(price_eur_mwh) filter (where direction = 'short') as short_price_eur_mwh,
-           bool_and(is_final)                                    as imbalance_price_is_final
-    from {{ ref('stg_imbalance_price') }}
-    group by interval_start
+    select * from {{ ref('int_imbalance_price_quarter_hour') }}
 
 ),
 
@@ -90,6 +73,7 @@ portfolio as (
 select settled.metering_point,
        settled.interval_start,
        (settled.interval_start at time zone 'Europe/Vienna')::date as delivery_day,
+       settled.forecast_method,
        settled.forecast_residual_kwh,
        settled.bought_kwh,
        settled.actual_kwh,

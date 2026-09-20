@@ -330,3 +330,116 @@ def test_a_reading_without_an_imbalance_price_is_counted_not_summed_away(cursor)
     unpriced = revisions(cursor)[FIRST_CUSTOMER]
     assert unpriced["unpriced_quarter_hours"] == 1
     assert unpriced["final_imbalance_cost_eur"] is None
+
+
+def took_on(cur, point, moment: datetime, kwh: float, delivered: datetime, version=1) -> None:
+    """A reading for any quarter hour, delivered at a chosen moment."""
+    cur.execute(
+        "INSERT INTO raw.meter_reading (metering_point, interval_start, consumption_kwh,"
+        " allocated_kwh, meter_id, version, delivered_at, payload_hash)"
+        " VALUES (%s, %s, %s, 0, %s, %s, %s, %s)",
+        (
+            point,
+            moment,
+            kwh,
+            f"MV-{point[-1]}",
+            version,
+            delivered,
+            f"t-h-{point}-{moment}-{delivered}-{version}",
+        ),
+    )
+
+
+def next_morning(moment: datetime) -> datetime:
+    """When the grid operator delivers a day: 02:30 on the day after."""
+    return (moment + timedelta(days=1)).replace(hour=2, minute=30)
+
+
+def persistence(cur, point: str) -> dict:
+    """The persistence forecast for one test customer at the test hour."""
+    cur.execute(
+        f"SELECT * FROM ({rendered('int_forecast_persistence')}) AS forecast"  # noqa: S608
+        " WHERE metering_point = %s AND interval_start = %s",
+        (point, HOUR),
+    )
+    columns = [column.name for column in cur.description]
+    (row,) = cur.fetchall()
+    return dict(zip(columns, row, strict=True))
+
+
+def test_persistence_is_the_average_of_the_same_time_on_recent_days_of_the_same_kind(cursor):
+    # The test hour is a Thursday. Two days and a week earlier are working days too.
+    day_ahead(cursor, HOUR, 100.0, timedelta(minutes=15))
+    for days_back, kwh in ((2, 0.10), (7, 0.20)):
+        earlier = HOUR - timedelta(days=days_back)
+        took_on(cursor, FIRST_CUSTOMER, earlier, kwh, next_morning(earlier))
+    forecast = persistence(cursor, FIRST_CUSTOMER)
+    assert forecast["forecast_residual_kwh"] == pytest.approx(0.15)
+    assert forecast["history_quarter_hours"] == 2
+    assert forecast["fell_back_to_standard_profile"] is False
+
+
+def test_persistence_never_uses_what_was_not_known_when_the_purchase_was_made(cursor):
+    day_ahead(cursor, HOUR, 100.0, timedelta(minutes=15))
+    known = HOUR - timedelta(days=2)
+    took_on(cursor, FIRST_CUSTOMER, known, 0.10, next_morning(known))
+    # Yesterday: its readings arrive tonight, after the purchase for today was made at noon.
+    yesterday = HOUR - timedelta(days=1)
+    took_on(cursor, FIRST_CUSTOMER, yesterday, 9.0, next_morning(yesterday))
+    # A working day whose reading came three days late: not known on the morning after it.
+    late = HOUR - timedelta(days=6)
+    took_on(cursor, FIRST_CUSTOMER, late, 9.0, next_morning(late) + timedelta(days=3))
+    # A correction of the known day that arrives a week later: the purchase was made without it.
+    took_on(cursor, FIRST_CUSTOMER, known, 9.0, next_morning(known) + timedelta(days=7), 2)
+    # A Saturday is not the same kind of day as a Thursday.
+    saturday = HOUR - timedelta(days=5)
+    took_on(cursor, FIRST_CUSTOMER, saturday, 9.0, next_morning(saturday))
+    # Another time of day says nothing about noon.
+    other_time = known + timedelta(hours=3)
+    took_on(cursor, FIRST_CUSTOMER, other_time, 9.0, next_morning(other_time))
+    # And three weeks ago is too long ago.
+    old = HOUR - timedelta(days=21)
+    took_on(cursor, FIRST_CUSTOMER, old, 9.0, next_morning(old))
+    forecast = persistence(cursor, FIRST_CUSTOMER)
+    assert forecast["forecast_residual_kwh"] == pytest.approx(0.10)
+    assert forecast["history_quarter_hours"] == 1
+
+
+def test_a_customer_without_history_gets_the_standard_profile(cursor):
+    day_ahead(cursor, HOUR, 100.0, timedelta(minutes=15))
+    forecast = persistence(cursor, SECOND_CUSTOMER)
+    assert forecast["fell_back_to_standard_profile"] is True
+    assert forecast["forecast_residual_kwh"] == pytest.approx(ANNUAL_KWH / 1000 * SHAPE[0])
+
+
+def test_each_method_is_bought_by_the_same_rule_and_settled_in_its_own_direction(cursor):
+    day_ahead(cursor, HOUR, 100.0, timedelta(hours=1))
+    # The first customer took far more two days ago than their profile says, so persistence buys
+    # far more for them than the standard profile does. The second has no history.
+    for quarter in QUARTERS:
+        earlier = quarter - timedelta(days=2)
+        took_on(cursor, FIRST_CUSTOMER, earlier, 0.50, next_morning(earlier))
+        imbalance(cursor, quarter, long_price=40.0, short_price=120.0)
+        took(cursor, FIRST_CUSTOMER, quarter, 0.07)
+        took(cursor, SECOND_CUSTOMER, quarter, 0.11)
+    cursor.execute(
+        "SELECT forecast_method, sum(delivered_kwh), sum(bought_for_settled_kwh),"  # noqa: S608
+        " count(DISTINCT bought_for_settled_kwh), min(imbalance_price_eur_mwh),"
+        f" max(imbalance_price_eur_mwh) FROM ({rendered('fct_forecast_comparison')}) AS c"
+        " WHERE interval_start >= %s AND interval_start < %s GROUP BY 1 ORDER BY 1",
+        (HOUR, HOUR + timedelta(hours=1)),
+    )
+    by_method = {row[0]: row[1:] for row in cursor.fetchall()}
+    profile_hour = sum(SHAPE) * ANNUAL_KWH / 1000
+    delivered = 4 * (0.07 + 0.11)
+
+    took_, bought, distinct_purchases, low, high = by_method["standard_profile"]
+    assert (took_, bought) == (pytest.approx(delivered), pytest.approx(2 * profile_hour))
+    # We delivered more than the profile bought: short, so the short price, in every quarter hour.
+    assert (distinct_purchases, low, high) == (1, 120.0, 120.0)
+
+    took_, bought, distinct_purchases, low, high = by_method["persistence"]
+    # History for one customer, the profile for the other; never the two methods averaged together.
+    assert (took_, bought) == (pytest.approx(delivered), pytest.approx(4 * 0.50 + profile_hour))
+    # Persistence bought more than was delivered: long, so the long price. Its own direction.
+    assert (distinct_purchases, low, high) == (1, 40.0, 40.0)

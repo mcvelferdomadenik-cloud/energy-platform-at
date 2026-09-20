@@ -3,7 +3,9 @@
 --
 -- Every right-hand side is computed on its own path, from other models, so nothing here is a sum
 -- compared with itself:
---   purchase    the auction period's average of the TOTAL forecast, from the forecast model
+--   purchase    the auction period's average of the TOTAL forecast, from the forecast model itself
+--               (the standard profile, which is the method fct_customer_cost operates on), not
+--               from int_purchase, whose averaging this is meant to check
 --   imbalance   what customers took, from the allocation mart, minus what was bought for them
 --   price       the long or the short price from staging, by the sign of that imbalance
 -- A customer doubled in a join, an average over the wrong period, a wrong sign or the wrong
@@ -62,11 +64,7 @@ delivered as (
 
 imbalance_price as (
 
-    select interval_start,
-           max(price_eur_mwh) filter (where direction = 'long')  as long_price_eur_mwh,
-           max(price_eur_mwh) filter (where direction = 'short') as short_price_eur_mwh
-    from {{ ref('stg_imbalance_price') }}
-    group by interval_start
+    select * from {{ ref('int_imbalance_price_quarter_hour') }}
 
 )
 
