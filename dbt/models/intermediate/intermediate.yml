@@ -38,3 +38,17 @@ models:
               arguments:
                 min_value: 0
                 max_value: 1
+
+  - name: int_meter_reading_preliminary
+    description: What each customer took from us according to the readings that had arrived by 06:00 Vienna time on the day after delivery.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, interval_start]
+    columns:
+      - name: residual_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0

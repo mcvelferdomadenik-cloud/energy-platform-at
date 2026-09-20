@@ -252,3 +252,81 @@ def test_the_portfolio_compares_delivery_only_with_the_purchase_for_settled_cust
     # and the purchase for the customer who has not reported stands apart.
     assert row["day_ahead_cost_eur"] == pytest.approx(row["perfect_forecast_cost_eur"])
     assert row["unsettled_day_ahead_cost_eur"] == pytest.approx(bought / 1000 * 100.0)
+
+
+def revisions(cur) -> dict[str, dict]:
+    """The revision mart for the test customers on the day the tests build, keyed by customer."""
+    cur.execute(
+        f"SELECT * FROM ({rendered('fct_settlement_revision')}) AS mart"  # noqa: S608
+        " WHERE metering_point = ANY(%s) AND delivery_day = %s",
+        (list(CUSTOMERS), HOUR.date()),
+    )
+    columns = [column.name for column in cur.description]
+    return {row[0]: dict(zip(columns, row, strict=True)) for row in cur.fetchall()}
+
+
+def arrived(cur, point: str, kwh: float, days_after: int, version: int = 1) -> None:
+    """A reading for the test hour that arrives so many days after delivery, at 02:30."""
+    when = HOUR.replace(hour=2, minute=30) + timedelta(days=days_after)
+    cur.execute(
+        "INSERT INTO raw.meter_reading (metering_point, interval_start, consumption_kwh,"
+        " allocated_kwh, meter_id, version, delivered_at, payload_hash)"
+        " VALUES (%s, %s, %s, 0, %s, %s, %s, %s)",
+        (point, HOUR, kwh, f"MV-{point[-1]}", version, when, f"t-a-{point}-{days_after}-{version}"),
+    )
+
+
+def test_a_reading_that_came_late_explains_its_whole_cost_as_late(cursor):
+    day_ahead(cursor, HOUR, 100.0, timedelta(minutes=15))
+    imbalance(cursor, HOUR, long_price=200.0, short_price=200.0)
+    bought = ANNUAL_KWH / 1000 * SHAPE[0]
+    arrived(cursor, FIRST_CUSTOMER, bought + 0.05, days_after=1)
+    # The earliest a late reading can come: the second morning. A cutoff one day too generous
+    # would take it for a first delivery.
+    arrived(cursor, SECOND_CUSTOMER, bought + 0.02, days_after=2)
+    mart = revisions(cursor)
+    assert mart[FIRST_CUSTOMER]["reason"] == "unchanged"
+    assert mart[FIRST_CUSTOMER]["revision_eur"] == 0
+    late = mart[SECOND_CUSTOMER]
+    assert (late["reason"], late["preliminary_imbalance_cost_eur"]) == ("late", None)
+    assert late["revision_eur"] == pytest.approx(0.02 / 1000 * 200.0)
+
+
+def test_a_corrected_reading_is_revised_by_exactly_the_energy_it_moved(cursor):
+    day_ahead(cursor, HOUR, 100.0, timedelta(minutes=15))
+    imbalance(cursor, HOUR, long_price=200.0, short_price=200.0)
+    bought = ANNUAL_KWH / 1000 * SHAPE[0]
+    arrived(cursor, FIRST_CUSTOMER, bought + 0.05, days_after=1)
+    arrived(cursor, FIRST_CUSTOMER, bought + 0.01, days_after=7, version=2)
+    corrected = revisions(cursor)[FIRST_CUSTOMER]
+    assert corrected["reason"] == "corrected"
+    assert corrected["preliminary_imbalance_cost_eur"] == pytest.approx(0.05 / 1000 * 200.0)
+    assert corrected["final_imbalance_cost_eur"] == pytest.approx(0.01 / 1000 * 200.0)
+    assert corrected["revision_eur"] == pytest.approx(-0.04 / 1000 * 200.0)
+
+
+def test_a_customer_who_never_reported_is_missing_and_moves_nothing(cursor):
+    day_ahead(cursor, HOUR, 100.0, timedelta(minutes=15))
+    imbalance(cursor, HOUR, long_price=200.0, short_price=200.0)
+    arrived(cursor, FIRST_CUSTOMER, 0.05, days_after=1)
+    silent = revisions(cursor)[SECOND_CUSTOMER]
+    assert (silent["reason"], silent["revision_eur"]) == ("missing", 0)
+    assert silent["final_imbalance_cost_eur"] is None
+
+
+def test_the_same_version_sent_again_with_another_value_is_a_correction(cursor):
+    day_ahead(cursor, HOUR, 100.0, timedelta(minutes=15))
+    imbalance(cursor, HOUR, long_price=200.0, short_price=200.0)
+    arrived(cursor, FIRST_CUSTOMER, 0.09, days_after=1)
+    arrived(cursor, FIRST_CUSTOMER, 0.07, days_after=5)
+    resent = revisions(cursor)[FIRST_CUSTOMER]
+    assert resent["reason"] == "corrected"
+    assert resent["revision_eur"] == pytest.approx(-0.02 / 1000 * 200.0)
+
+
+def test_a_reading_without_an_imbalance_price_is_counted_not_summed_away(cursor):
+    day_ahead(cursor, HOUR, 100.0, timedelta(minutes=15))
+    arrived(cursor, FIRST_CUSTOMER, 0.09, days_after=1)
+    unpriced = revisions(cursor)[FIRST_CUSTOMER]
+    assert unpriced["unpriced_quarter_hours"] == 1
+    assert unpriced["final_imbalance_cost_eur"] is None

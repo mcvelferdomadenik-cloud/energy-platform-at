@@ -166,6 +166,7 @@ def validate_reading_batch(payload: dict[str, object]) -> tuple[Reading, ...]:
     consumption = _amounts(payload, "consumption", MAX_POINT_KWH)
     allocated = _amounts(payload, "allocated", MAX_POINT_KWH)
     _expect_same_length(consumption, allocated, "consumption", "allocated")
+    _expect_delivered_after(delivered_at, start, len(consumption))
 
     readings = []
     for position, (used, given) in enumerate(zip(consumption, allocated, strict=True)):
@@ -205,6 +206,7 @@ def validate_community_batch(payload: dict[str, object]) -> tuple[CommunityReadi
     generation = _amounts(payload, "generation", MAX_COMMUNITY_KWH)
     consumption = _amounts(payload, "consumption", MAX_COMMUNITY_KWH)
     _expect_same_length(generation, consumption, "generation", "consumption")
+    _expect_delivered_after(delivered_at, start, len(generation))
 
     intervals = []
     for position, (made, used) in enumerate(zip(generation, consumption, strict=True)):
@@ -245,6 +247,21 @@ def _identifier(payload: dict[str, object], field: str, pattern: re.Pattern[str]
     if not isinstance(value, str) or not pattern.fullmatch(value):
         raise MessageError(f"{field} {value!r} is not a valid identifier")
     return value
+
+
+def _expect_delivered_after(delivered_at: datetime, start: datetime, intervals: int) -> None:
+    """A reading cannot be delivered before the last interval it reports has ended.
+
+    The preliminary settlement takes what had been delivered by the morning after. A forged
+    message with a delivery time in the past would count as known then and rewrite the
+    preliminary settlement of a day long gone, for good, because the table is append-only.
+    """
+    end = start + intervals * RESOLUTION
+    if delivered_at < end:
+        raise MessageError(
+            f"delivered_at {delivered_at.isoformat()} is before the delivered day ends "
+            f"({end.isoformat()})"
+        )
 
 
 def _version(payload: dict[str, object]) -> int:

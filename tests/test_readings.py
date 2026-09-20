@@ -20,6 +20,7 @@ from megavolt.readings import (
     encode,
     reading_batch,
     readings_of,
+    utc_text,
     validate_community_batch,
     validate_reading_batch,
 )
@@ -279,3 +280,18 @@ def test_an_unknown_field_is_ignored_rather_than_refused():
 
 def test_the_encoder_and_the_validator_agree_on_what_a_batch_is():
     assert len(validate_reading_batch(json.loads(encode(batch())))) == 96
+
+
+def test_a_reading_claimed_to_be_delivered_before_its_day_ended_is_refused():
+    # Forged history: a delivery time in the past would count as known on the morning after and
+    # rewrite the preliminary settlement of that day for good.
+    day_end = START + timedelta(minutes=15 * 96)
+    with pytest.raises(MessageError, match="before the delivered day ends"):
+        validate_reading_batch(batch(delivered_at=utc_text(day_end - timedelta(minutes=1))))
+    assert validate_reading_batch(batch(delivered_at=utc_text(day_end)))
+
+
+def test_community_totals_claimed_to_be_delivered_before_their_day_ended_are_refused():
+    early = START + timedelta(hours=1)
+    with pytest.raises(MessageError, match="before the delivered day ends"):
+        validate_community_batch(community_batch(1, early, START, [0.0] * 96, [130.0] * 96))

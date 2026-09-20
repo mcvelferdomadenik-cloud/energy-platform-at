@@ -127,3 +127,20 @@ models:
       - name: bought_kwh
         data_tests:
           - not_null
+
+  - name: fct_settlement_revision
+    description: Per customer and delivery day - the settlement of the next morning against the settlement of today, the difference in euro, and the reason.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, delivery_day]
+    columns:
+      - name: reason
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [late, corrected, completed, unchanged, missing]
+      - name: revision_eur
+        data_tests:
+          - not_null
