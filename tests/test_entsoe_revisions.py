@@ -37,7 +37,8 @@ FIRST, SECOND, THIRD = (datetime(2025, 4, day, 6, 0, tzinfo=UTC) for day in (1, 
 @pytest.fixture
 def cursor():
     """A cursor whose work never reaches the warehouse."""
-    connection = psycopg.connect(dsn())
+    # Never commits: raw is append-only for this role, so a committed test row could not be removed.
+    connection = psycopg.connect(dsn(), autocommit=False)
     try:
         with connection.cursor() as cur:
             yield cur

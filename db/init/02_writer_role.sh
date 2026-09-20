@@ -9,9 +9,11 @@ if [ -z "$WAREHOUSE_WRITER_PASSWORD" ]; then
 fi
 
 psql -v ON_ERROR_STOP=1 -v writer_password="$WAREHOUSE_WRITER_PASSWORD" \
-     --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
+     -v dbname="$POSTGRES_DB" --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
 CREATE ROLE megavolt_writer LOGIN PASSWORD :'writer_password';
 GRANT USAGE ON SCHEMA raw TO megavolt_writer;
 GRANT SELECT, INSERT ON ALL TABLES IN SCHEMA raw TO megavolt_writer;
 ALTER DEFAULT PRIVILEGES IN SCHEMA raw GRANT SELECT, INSERT ON TABLES TO megavolt_writer;
+-- Every role may create temporary tables by default. The pipeline never needs one.
+REVOKE TEMPORARY ON DATABASE :"dbname" FROM PUBLIC;
 SQL

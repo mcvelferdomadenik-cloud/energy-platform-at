@@ -67,7 +67,8 @@ READINGS = [
 @pytest.fixture(scope="module")
 def staged():
     """Run the staging query over the fixture rows and roll everything back afterwards."""
-    connection = psycopg.connect(dsn())
+    # Never commits: raw is append-only for this role, so a committed test row could not be removed.
+    connection = psycopg.connect(dsn(), autocommit=False)
     try:
         with connection.cursor() as cursor:
             cursor.executemany(

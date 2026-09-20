@@ -43,3 +43,54 @@ models:
           - dbt_expectations.expect_column_values_to_be_between:
               arguments:
                 min_value: 0
+
+  - name: fct_community_allocation
+    description: Per customer and quarter hour - consumption, the community's share, our residual, and whether the delivered allocation follows the community's rule.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, interval_start]
+      - dbt_expectations.expect_column_pair_values_A_to_be_greater_than_B:
+          arguments:
+            column_A: consumption_kwh
+            column_B: allocated_kwh
+            or_equal: true
+    columns:
+      - name: residual_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+      - name: coverage_ratio
+        data_tests:
+          # accepted_values below skips NULLs, so a reading without community totals would be
+          # covered by no test at all. warn, not error: totals can arrive after the readings.
+          - not_null:
+              config:
+                severity: warn
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+                max_value: 1
+      - name: follows_allocation_rule
+        data_tests:
+          # warn, not error: a first delivery that a correction will replace does not follow the rule,
+          # and corrections take five to nine days, so recent days always carry a few.
+          - accepted_values:
+              arguments:
+                values: [true]
+              config:
+                severity: warn
+
+  - name: fct_supplier_position
+    description: Per quarter hour - what our customers took from us, next to the community's generation, consumption, shared energy and surplus.
+    columns:
+      - name: interval_start
+        data_tests: [unique, not_null]
+      - name: our_residual_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
