@@ -2,7 +2,7 @@
 
 import io
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -20,6 +20,8 @@ from megavolt.entsoe import (
     redact,
 )
 
+HOUR = timedelta(hours=1)
+QUARTER = timedelta(minutes=15)
 NS = "urn:iec62325.351:tc57wg16:451-3:publicationdocument:7:0"
 
 
@@ -86,9 +88,9 @@ def test_format_period_rejects_a_naive_datetime():
 def test_parse_returns_one_point_per_interval():
     points = parse_price_document(price_document("A01", {1: 85.5, 2: 90.0, 3: 78.25}))
     assert points == [
-        PricePoint(datetime(2026, 9, 10, 0, 0, tzinfo=UTC), 85.5),
-        PricePoint(datetime(2026, 9, 10, 1, 0, tzinfo=UTC), 90.0),
-        PricePoint(datetime(2026, 9, 10, 2, 0, tzinfo=UTC), 78.25),
+        PricePoint(datetime(2026, 9, 10, 0, 0, tzinfo=UTC), 85.5, HOUR),
+        PricePoint(datetime(2026, 9, 10, 1, 0, tzinfo=UTC), 90.0, HOUR),
+        PricePoint(datetime(2026, 9, 10, 2, 0, tzinfo=UTC), 78.25, HOUR),
     ]
 
 
@@ -208,7 +210,7 @@ def zipped(*documents: bytes) -> bytes:
 def test_load_carries_a_missing_quarter_hour_forward_as_entsoe_intends():
     points = parse_load_document(load_document({1: 5429.2, 2: 5400.0, 4: 5389.0}))
     assert [point.load_mw for point in points] == [5429.2, 5400.0, 5400.0, 5389.0]
-    assert points[0] == LoadPoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), 5429.2)
+    assert points[0] == LoadPoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), 5429.2, QUARTER)
 
 
 def test_load_refuses_an_acknowledgement():
@@ -220,10 +222,18 @@ def test_imbalance_prices_come_out_of_the_zip_with_direction_and_status():
     long, short = imbalance_series("A04", [103.75, 70.76]), imbalance_series("A05", [103.75, 70.76])
     points = parse_imbalance_document(zipped(imbalance_document("A02", long, short)))
     assert points == [
-        ImbalancePricePoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), "A04", 103.75, "A02"),
-        ImbalancePricePoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), "A05", 103.75, "A02"),
-        ImbalancePricePoint(datetime(2025, 3, 30, 23, 15, tzinfo=UTC), "A04", 70.76, "A02"),
-        ImbalancePricePoint(datetime(2025, 3, 30, 23, 15, tzinfo=UTC), "A05", 70.76, "A02"),
+        ImbalancePricePoint(
+            datetime(2025, 3, 30, 23, 0, tzinfo=UTC), "A04", 103.75, "A02", QUARTER
+        ),
+        ImbalancePricePoint(
+            datetime(2025, 3, 30, 23, 0, tzinfo=UTC), "A05", 103.75, "A02", QUARTER
+        ),
+        ImbalancePricePoint(
+            datetime(2025, 3, 30, 23, 15, tzinfo=UTC), "A04", 70.76, "A02", QUARTER
+        ),
+        ImbalancePricePoint(
+            datetime(2025, 3, 30, 23, 15, tzinfo=UTC), "A05", 70.76, "A02", QUARTER
+        ),
     ]
 
 
@@ -309,3 +319,34 @@ def test_a_position_outside_its_period_is_refused_rather_than_dropped():
 def test_redact_hides_the_bare_token_even_without_its_parameter_name(monkeypatch):
     monkeypatch.setenv("ENTSOE_API_TOKEN", "abc123")
     assert "abc123" not in redact("the server echoed abc123 back")
+
+
+def test_a_position_that_appears_twice_is_refused_rather_than_overwritten():
+    document = price_document("A01", {1: 85.5}).replace(
+        "</Period>",
+        "<Point><position>1</position><price.amount>90.0</price.amount></Point></Period>",
+    )
+    with pytest.raises(EntsoeError, match="twice"):
+        parse_price_document(document)
+
+
+def test_unreadable_bounds_positions_and_values_fail_as_our_own_error():
+    good = price_document("A01", {1: 85.5})
+    hostile = (
+        good.replace("2026-09-10T00:00Z", "not-a-date"),
+        good.replace("2026-09-10T00:00Z", "2026-09-10T00:00").replace(
+            "2026-09-10T03:00Z", "2026-09-10T03:00"
+        ),
+        good.replace("<position>1</position>", "<position>one</position>"),
+        good.replace("85.5", "eighty"),
+    )
+    for document in hostile:
+        with pytest.raises(EntsoeError):
+            parse_price_document(document)
+
+
+def test_the_same_long_period_repeated_is_refused_by_the_work_it_costs(monkeypatch):
+    monkeypatch.setattr("megavolt.entsoe.MAX_PERIOD_POINTS", 5)
+    series = time_series("A01", {1: 85.5, 2: 90.0, 3: 78.25})
+    with pytest.raises(EntsoeError, match="more points"):
+        parse_price_document(document_with(series, series))

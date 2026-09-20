@@ -19,7 +19,6 @@ from megavolt.entsoe import AT_BIDDING_ZONE, EntsoeError, actual_load, imbalance
 from megavolt.warehouse import store_actual_load, store_imbalance_prices
 
 VIENNA = "Europe/Vienna"
-RESOLUTION = timedelta(minutes=15)
 # Probed on 2026-09-19: 1 August was still intermediate after 49 days, 15 July final after 66.
 # The window has to reach past that, or a day would never be seen turning final.
 WINDOW_DAYS = 75
@@ -74,7 +73,7 @@ def entsoe_actuals():
                 continue
             finally:
                 time.sleep(PAUSE_SECONDS)
-            new = store_imbalance_prices(points, AT_BIDDING_ZONE, RESOLUTION)
+            new = store_imbalance_prices(points, AT_BIDDING_ZONE)
             statuses = sorted({point.doc_status for point in points})
             print(f"{day:%Y-%m-%d}: {len(points)} prices, status {statuses}, {new} new rows")
             stored += new
@@ -92,7 +91,7 @@ def entsoe_actuals():
                 continue
             finally:
                 time.sleep(PAUSE_SECONDS)
-            new = store_actual_load(points, AT_BIDDING_ZONE, RESOLUTION)
+            new = store_actual_load(points, AT_BIDDING_ZONE)
             print(f"{day:%Y-%m-%d}: {len(points)} load values, {new} new rows")
             stored += new
         return finished(stored, failed)

@@ -78,6 +78,9 @@ updates:
     schedule:
       interval: monthly
     ignore:
+      # Built here from airflow/Dockerfile and never pushed anywhere, so there is no registry to
+      # ask about it; without this entry the whole job fails on the lookup.
+      - dependency-name: megavolt/airflow
       - dependency-name: timescale/timescaledb
         update-types: [version-update:semver-major]
 

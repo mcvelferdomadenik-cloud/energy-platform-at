@@ -20,6 +20,10 @@ models:
     staging:
       +schema: staging
       +materialized: view
+    # Steps between staging and the marts: still views over raw, still always current.
+    intermediate:
+      +schema: staging
+      +materialized: view
     marts:
       +schema: marts
       +materialized: table

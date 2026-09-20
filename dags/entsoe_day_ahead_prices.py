@@ -11,7 +11,6 @@ from megavolt.entsoe import AT_BIDDING_ZONE, day_ahead_prices
 from megavolt.warehouse import store_day_ahead_prices
 
 VIENNA = "Europe/Vienna"
-RESOLUTION = timedelta(minutes=15)
 
 
 @dag(
@@ -35,7 +34,7 @@ def entsoe_day_ahead_prices():
         delivery_day = run_day.add(days=1)
 
         prices = day_ahead_prices(delivery_day, delivery_day.add(days=1))
-        stored = store_day_ahead_prices(prices, AT_BIDDING_ZONE, RESOLUTION)
+        stored = store_day_ahead_prices(prices, AT_BIDDING_ZONE)
         print(f"{delivery_day:%Y-%m-%d}: fetched {len(prices)}, stored {stored} new rows")
         return stored
 

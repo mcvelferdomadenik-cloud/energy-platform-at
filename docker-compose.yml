@@ -8,6 +8,8 @@ x-airflow-common: &airflow-common
     context: .
     dockerfile: airflow/Dockerfile
   image: megavolt/airflow:3.3.1
+  # Built here and nowhere else. The name is not ours on any registry, so never pull it.
+  pull_policy: build
   restart: unless-stopped
   user: "${AIRFLOW_UID:-50000}:0"
   environment: &airflow-env
@@ -20,8 +22,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
       postgresql+psycopg2://airflow:${AIRFLOW_DB_PASSWORD:?set AIRFLOW_DB_PASSWORD in .env}@airflow-db/airflow
-    WAREHOUSE_DSN: >-
-      postgresql://megavolt_writer:${WAREHOUSE_WRITER_PASSWORD:?set WAREHOUSE_WRITER_PASSWORD in .env}@warehouse:5432/${POSTGRES_DB}
   volumes:
     - ./dags:/opt/airflow/dags:ro
     - airflow_logs:/opt/airflow/logs
@@ -104,6 +104,9 @@ services:
     environment:
       <<: *airflow-env
       ENTSOE_API_TOKEN: ${ENTSOE_API_TOKEN:?set ENTSOE_API_TOKEN in .env}
+      # Tasks run here, so this is the one Airflow container that writes to the warehouse.
+      WAREHOUSE_DSN: >-
+        postgresql://megavolt_writer:${WAREHOUSE_WRITER_PASSWORD:?set WAREHOUSE_WRITER_PASSWORD in .env}@warehouse:5432/${POSTGRES_DB}
       # meter_stream_daily runs here. The seed must be the one the laptop uses, or a scheduled
       # day and a hand-run day would produce different readings for the same date.
       KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
@@ -170,6 +173,8 @@ services:
   # below holds the two addresses it needs and no other secret.
   meter-consumer:
     image: megavolt/airflow:3.3.1
+    # The image the Airflow services build; never looked up on a registry.
+    pull_policy: never
     container_name: megavolt-meter-consumer
     restart: unless-stopped
     command: python -m megavolt.consumer
@@ -184,6 +189,9 @@ services:
       warehouse:
         condition: service_healthy
       redpanda-init:
+        condition: service_completed_successfully
+      # Builds the image this service runs; without it a first start finds no image.
+      airflow-init:
         condition: service_completed_successfully
 
 volumes:

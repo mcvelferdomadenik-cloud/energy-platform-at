@@ -29,8 +29,8 @@ from megavolt.warehouse import (  # noqa: E402
 )
 
 AREA = "TEST-AREA-NOT-REAL"
-INTERVAL = datetime(2025, 3, 30, 23, 0, tzinfo=UTC)
 QUARTER = timedelta(minutes=15)
+INTERVAL = datetime(2025, 3, 30, 23, 0, tzinfo=UTC)
 FIRST, SECOND, THIRD = (datetime(2025, 4, day, 6, 0, tzinfo=UTC) for day in (1, 2, 3))
 
 
@@ -48,8 +48,8 @@ def cursor():
 
 def deliver_price(cur, price: float, status: str, received_at: datetime) -> int:
     """Deliver one long-direction price and return how many rows that stored."""
-    point = ImbalancePricePoint(INTERVAL, "A04", price, status)
-    cur.executemany(_INSERT_IMBALANCE_PRICE, imbalance_rows([point], AREA, QUARTER, received_at))
+    point = ImbalancePricePoint(INTERVAL, "A04", price, status, QUARTER)
+    cur.executemany(_INSERT_IMBALANCE_PRICE, imbalance_rows([point], AREA, received_at))
     return cur.rowcount
 
 
@@ -99,7 +99,7 @@ def test_the_database_refuses_a_price_that_is_not_a_number(cursor):
 
 def test_a_load_value_revised_back_to_its_first_value_ends_on_that_value(cursor):
     for load, received_at in ((5400.0, FIRST), (5500.0, SECOND), (5400.0, THIRD)):
-        rows = load_rows([LoadPoint(INTERVAL, load)], AREA, QUARTER, received_at)
+        rows = load_rows([LoadPoint(INTERVAL, load, QUARTER)], AREA, received_at)
         cursor.executemany(_INSERT_ACTUAL_LOAD, rows)
         assert cursor.rowcount == 1
     cursor.execute(
@@ -110,8 +110,8 @@ def test_a_load_value_revised_back_to_its_first_value_ends_on_that_value(cursor)
 
 
 def test_without_a_given_time_the_database_clock_stamps_the_row(cursor):
-    point = ImbalancePricePoint(INTERVAL, "A04", 100.0, "A01")
-    cursor.executemany(_INSERT_IMBALANCE_PRICE, imbalance_rows([point], AREA, QUARTER))
+    point = ImbalancePricePoint(INTERVAL, "A04", 100.0, "A01", QUARTER)
+    cursor.executemany(_INSERT_IMBALANCE_PRICE, imbalance_rows([point], AREA))
     cursor.execute(
         "SELECT received_at = now() FROM raw.imbalance_price WHERE control_area = %s", (AREA,)
     )

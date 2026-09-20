@@ -1,0 +1,19 @@
+version: 2
+
+# Every test is an error. A test may be `warn` only with a comment above it saying why.
+
+models:
+  - name: int_day_ahead_price_quarter_hour
+    description: One day-ahead price per bidding zone and quarter hour; hourly auction prices spread over their four quarter hours.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [bidding_zone, interval_start]
+    columns:
+      - name: price_eur_mwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: -500
+                max_value: 4000
