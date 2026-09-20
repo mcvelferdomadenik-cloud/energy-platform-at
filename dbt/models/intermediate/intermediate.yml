@@ -17,3 +17,24 @@ models:
               arguments:
                 min_value: -500
                 max_value: 4000
+
+  - name: int_forecast_standard_profile
+    description: Forecast v0 per customer and quarter hour - annual consumption times the APCS profile, minus the community's expected share.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, interval_start]
+    columns:
+      - name: forecast_residual_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+      - name: expected_coverage_ratio
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+                max_value: 1

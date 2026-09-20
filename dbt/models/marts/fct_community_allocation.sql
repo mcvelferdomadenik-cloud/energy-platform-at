@@ -5,6 +5,8 @@
 --
 --     allocated = consumption x min(1, community generation / community consumption)
 --
+-- Source: the dynamic allocation model for Austrian energy communities, energiegemeinschaften.gv.at.
+--
 -- A reading that does not follow the rule is almost always a first delivery that a correction will
 -- replace within days. The flag only sees what the rule can see: at night, when the community covers
 -- nothing, a wrong consumption still follows it, so a true flag is not proof that a reading is right.

@@ -1,7 +1,8 @@
 -- One day-ahead price per quarter hour, whatever resolution the auction had. The Austrian day-ahead
 -- auction priced whole hours until 30 September 2025 and quarter hours since, while meter readings
 -- are always quarter-hourly. An hourly price applies to each of its four quarter hours; a
--- quarter-hourly price passes through unchanged.
+-- quarter-hourly price passes through unchanged. (The single day-ahead coupling moved to a
+-- 15-minute market time unit on 1 October 2025; ENTSO-E publishes both under the same document.)
 --
 -- If the same quarter hour is covered twice, by an hour and by a quarter hour of its own, the
 -- delivery we received last wins; among equals the finer one does.

@@ -94,3 +94,36 @@ models:
           - dbt_expectations.expect_column_values_to_be_between:
               arguments:
                 min_value: 0
+
+  - name: fct_customer_cost
+    description: Per customer and quarter hour - what was bought for them, what they took, the imbalance they caused, and what both cost.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, interval_start]
+    columns:
+      - name: bought_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+      - name: day_ahead_cost_eur
+        data_tests:
+          - not_null
+      - name: imbalance_price_eur_mwh
+        data_tests:
+          # warn, not error: imbalance prices exist only for the periods that were fetched, and a
+          # quarter hour bought for tomorrow has no imbalance price yet.
+          - not_null:
+              config:
+                severity: warn
+
+  - name: fct_supplier_settlement
+    description: Per quarter hour - what we bought and delivered, what both cost, and what a perfect forecast would have cost; comparisons on settled customers only.
+    columns:
+      - name: interval_start
+        data_tests: [unique, not_null]
+      - name: bought_kwh
+        data_tests:
+          - not_null
