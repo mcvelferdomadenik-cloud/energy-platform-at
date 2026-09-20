@@ -1,0 +1,93 @@
+version: 2
+
+# Every test is an error. A test may be `warn` only with a comment above it saying why.
+
+models:
+  - name: int_day_ahead_price_quarter_hour
+    description: One day-ahead price per bidding zone and quarter hour; hourly auction prices spread over their four quarter hours.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [bidding_zone, interval_start]
+    columns:
+      - name: price_eur_mwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: -500
+                max_value: 4000
+
+  - name: int_forecast_standard_profile
+    description: Forecast v0 per customer and quarter hour - annual consumption times the APCS profile, minus the community's expected share.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, interval_start]
+    columns:
+      - name: forecast_residual_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+      - name: expected_coverage_ratio
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+                max_value: 1
+
+  - name: int_meter_reading_preliminary
+    description: What each customer took from us according to the readings that had arrived by 06:00 Vienna time on the day after delivery.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, interval_start]
+    columns:
+      - name: residual_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+
+  - name: int_forecast_persistence
+    description: Forecast v1 per customer and quarter hour - the average of what they took at this time of day on recent days of the same kind, known by the day before delivery.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [metering_point, interval_start]
+    columns:
+      - name: forecast_residual_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0
+
+  - name: int_imbalance_price_quarter_hour
+    description: The long and the short imbalance price of each quarter hour, side by side.
+    columns:
+      - name: interval_start
+        data_tests: [unique, not_null]
+
+  - name: int_purchase
+    description: What would be bought day-ahead per forecast method, customer and quarter hour; the one place a forecast becomes a purchase.
+    data_tests:
+      - dbt_expectations.expect_compound_columns_to_be_unique:
+          arguments:
+            column_list: [forecast_method, metering_point, interval_start]
+    columns:
+      - name: forecast_method
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [standard_profile, persistence]
+      - name: bought_kwh
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: 0

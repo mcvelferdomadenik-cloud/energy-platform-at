@@ -112,6 +112,13 @@ models:
           arguments:
             column_list: [control_area, interval_start, category]
     columns:
+      - name: control_area
+        data_tests:
+          # The marts join imbalance prices by quarter hour alone. A second area in this table would
+          # not fail anything downstream: the higher of two prices would simply win.
+          - accepted_values:
+              arguments:
+                values: ["10YAT-APG------L"]
       - name: direction
         data_tests:
           - accepted_values:

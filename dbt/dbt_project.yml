@@ -14,10 +14,24 @@ vars:
   # Required by dbt_expectations (via dbt_date). Business days are Austrian days.
   "dbt_date:time_zone": "Europe/Vienna"
 
+  # The community as a participating supplier knows it from the community's own rules: how large
+  # its solar plant is and how much all of its members consume in a year. ASSUMPTIONS of this
+  # simulation, fixed when the fictional community was designed (600 members, generation worth 45%
+  # of their consumption at 1000 kWh per kWp). Not researched figures about any real community.
+  community_plant_kwp: 2052
+  community_annual_kwh: 4560200
+  # What a kilowatt peak yields in a year at this location. The photovoltaic profile sums to
+  # 1000 over a year, so expected generation is plant x yield / 1000 x profile value.
+  community_yield_kwh_per_kwp: 1000
+
 models:
   megavolt:
     # raw is append-only, so a view over it is always current and never needs a rebuild.
     staging:
+      +schema: staging
+      +materialized: view
+    # Steps between staging and the marts: still views over raw, still always current.
+    intermediate:
       +schema: staging
       +materialized: view
     marts:

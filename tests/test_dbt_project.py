@@ -24,6 +24,13 @@ def test_the_profile_holds_names_of_variables_and_never_a_value():
             assert "env_var(" in line or line.strip() == "user: megavolt_dbt", line
 
 
+def test_a_singular_test_that_only_warns_says_why():
+    for test in DBT.glob("tests/*.sql"):
+        text = test.read_text()
+        if re.search(r"severity\s*=\s*'warn'", text):
+            assert re.search(r"^--.*\bwarn\b", text, re.M), f"{test.name} warns without a reason"
+
+
 def test_a_warning_severity_test_carries_a_reason():
     for yml in DBT.glob("models/**/*.yml"):
         lines = yml.read_text().splitlines()

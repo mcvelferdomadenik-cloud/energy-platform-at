@@ -68,6 +68,9 @@ class PricePoint:
 
     interval_start: datetime
     price_eur_mwh: float
+    # How long the price applies. The Austrian auction priced hours until 30 September 2025 and
+    # quarter hours since, so this is part of what was delivered, never a constant.
+    resolution: timedelta
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +79,7 @@ class LoadPoint:
 
     interval_start: datetime
     load_mw: float
+    resolution: timedelta
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +90,7 @@ class ImbalancePricePoint:
     category: str
     price_eur_mwh: float
     doc_status: str
+    resolution: timedelta
 
 
 def redact(text: str) -> str:
@@ -190,19 +195,26 @@ def _documents(body: bytes) -> list[bytes]:
     return documents
 
 
-def _values(root, value_tag: str, key=lambda series, start: start) -> dict[object, float]:
-    """Collect one value per key across all series, refusing two different values for a key."""
-    values: dict[object, float] = {}
+def _values(
+    root, value_tag: str, key=lambda series, start: start
+) -> dict[object, tuple[float, timedelta]]:
+    """Collect one value and its resolution per key, refusing two different ones for a key."""
+    values: dict[object, tuple[float, timedelta]] = {}
+    expanded = 0
     for series in (node for node in root.iter() if _local(node.tag) == "TimeSeries"):
         curve_type = _text(series, "curveType")
         for period in (node for node in series.iter() if _local(node.tag) == "Period"):
-            for start, value in _parse_period(period, curve_type, value_tag):
-                seen = values.setdefault(key(series, start), value)
-                if seen != value:
+            for start, value, step in _parse_period(period, curve_type, value_tag):
+                seen = values.setdefault(key(series, start), (value, step))
+                if seen != (value, step):
                     raise EntsoeError(
-                        f"two different values for {start:%Y-%m-%d %H:%M}: {seen} and {value}"
+                        f"two different values for {start:%Y-%m-%d %H:%M}: "
+                        f"{seen[0]} per {seen[1]} and {value} per {step}"
                     )
-                if len(values) > MAX_PERIOD_POINTS:
+                # Counted per point, not per key: the same year repeated a thousand times has
+                # few keys and would still cost an hour of processor time.
+                expanded += 1
+                if expanded > MAX_PERIOD_POINTS:
                     raise EntsoeError("document expands to more points than a year holds")
     if not values:
         raise EntsoeError("document contained no points")
@@ -212,13 +224,13 @@ def _values(root, value_tag: str, key=lambda series, start: start) -> dict[objec
 def parse_price_document(xml: bytes | str) -> list[PricePoint]:
     """Turn a Publication_MarketDocument into price points, without inventing missing ones."""
     prices = _values(_root(xml), "price.amount")
-    return [PricePoint(start, price) for start, price in sorted(prices.items())]
+    return [PricePoint(start, price, step) for start, (price, step) in sorted(prices.items())]
 
 
 def parse_load_document(xml: bytes | str) -> list[LoadPoint]:
     """Turn a GL_MarketDocument into load points, in MW."""
     loads = _values(_root(xml), "quantity")
-    return [LoadPoint(start, load) for start, load in sorted(loads.items())]
+    return [LoadPoint(start, load, step) for start, (load, step) in sorted(loads.items())]
 
 
 def _category(series, start) -> tuple[str, datetime]:
@@ -242,15 +254,18 @@ def parse_imbalance_document(body: bytes) -> list[ImbalancePricePoint]:
         status = None if status_node is None else _text(status_node, "value")
         if status not in DOC_STATUSES:
             raise EntsoeError(f"imbalance document has an unknown status: {status!r}")
-        for (category, start), price in _values(root, "imbalance_Price.amount", _category).items():
-            point = ImbalancePricePoint(start, category, price, status)
+        found = _values(root, "imbalance_Price.amount", _category)
+        for (category, start), (price, step) in found.items():
+            point = ImbalancePricePoint(start, category, price, status, step)
             # Two documents in one answer may repeat an interval, never disagree about it.
             if points.setdefault((category, start), point) != point:
                 raise EntsoeError(f"two documents disagree about {start:%Y-%m-%d %H:%M}")
     return sorted(points.values(), key=lambda point: (point.interval_start, point.category))
 
 
-def _parse_period(period, curve_type: str | None, value_tag: str) -> list[tuple[datetime, float]]:
+def _parse_period(
+    period, curve_type: str | None, value_tag: str
+) -> list[tuple[datetime, float, timedelta]]:
     """Expand one Period into one value per interval, carrying values forward only for A03."""
     interval = _first(period, "timeInterval")
     resolution = _text(period, "resolution")
@@ -261,7 +276,13 @@ def _parse_period(period, curve_type: str | None, value_tag: str) -> list[tuple[
     bounds = _text(interval, "start"), _text(interval, "end")
     if None in bounds:
         raise EntsoeError("period is missing its time interval bounds")
-    start, end = (datetime.fromisoformat(bound) for bound in bounds)
+    try:
+        start, end = (datetime.fromisoformat(bound) for bound in bounds)
+    except ValueError:
+        raise EntsoeError(f"period has unreadable bounds: {bounds}") from None
+    # A bound without a zone would be stored in whatever zone the database session has.
+    if start.tzinfo is None or end.tzinfo is None:
+        raise EntsoeError(f"period bounds carry no time zone: {bounds}")
     expected = int((end - start) / step)
     if not 0 < expected <= MAX_PERIOD_POINTS:
         raise EntsoeError(f"period claims {expected} intervals, refusing to expand it")
@@ -273,21 +294,28 @@ def _parse_period(period, curve_type: str | None, value_tag: str) -> list[tuple[
         position, value = _text(point, "position"), _text(point, value_tag)
         if position is None or value is None:
             raise EntsoeError(f"point is missing its position or its {value_tag}")
-        number = float(value)
+        try:
+            index, number = int(position), float(value)
+        except ValueError:
+            raise EntsoeError(
+                f"point {position!r} has an unreadable {value_tag}: {value!r}"
+            ) from None
         if not math.isfinite(number):
             raise EntsoeError(f"point {position} has a {value_tag} that is not a number: {value!r}")
-        values[int(position)] = number
+        if index in values:
+            raise EntsoeError(f"position {index} appears twice in one period")
+        values[index] = number
     if values and not 1 <= min(values) <= max(values) <= expected:
         raise EntsoeError(f"period of {expected} intervals has a position outside it")
 
-    result: list[tuple[datetime, float]] = []
+    result: list[tuple[datetime, float, timedelta]] = []
     carried: float | None = None
     for position in range(1, expected + 1):
         if position in values:
             carried = values[position]
         elif curve_type != "A03" or carried is None:
             continue
-        result.append((start + (position - 1) * step, carried))
+        result.append((start + (position - 1) * step, carried, step))
     return result
 
 

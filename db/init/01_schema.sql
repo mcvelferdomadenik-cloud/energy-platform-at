@@ -15,7 +15,20 @@ CREATE TABLE raw.day_ahead_price (
     source         text             NOT NULL DEFAULT 'entsoe',
     received_at    timestamptz      NOT NULL DEFAULT now(),
     payload_hash   text             NOT NULL,
-    PRIMARY KEY (bidding_zone, interval_start, payload_hash)
+    -- received_at is in the key because a value can return to an earlier one (A, B, A), and the
+    -- third delivery must be kept: the latest row wins in staging.
+    PRIMARY KEY (bidding_zone, interval_start, payload_hash, received_at),
+    -- An upper bound also refuses NaN, which Postgres sorts above every number.
+    CHECK (price_eur_mwh BETWEEN -100000 AND 100000),
+    -- A model spreads each price over its resolution in quarter-hour steps, so an absurd
+    -- resolution would multiply one row into millions, and a zero one would make it vanish.
+    CHECK (resolution BETWEEN interval '15 minutes' AND interval '1 day'),
+    -- Whole quarter hours, starting on one: 20 minutes would leave five of them unpriced, and 50
+    -- would run into the next price.
+    CONSTRAINT day_ahead_price_on_the_quarter_hour_grid CHECK (
+        extract(epoch from resolution)::bigint % 900 = 0
+        AND extract(epoch from interval_start)::bigint % 900 = 0
+    )
 ) WITH (
     timescaledb.hypertable,
     timescaledb.partition_column = 'interval_start'
@@ -33,7 +46,8 @@ CREATE TABLE raw.load_profile (
     received_at    timestamptz      NOT NULL DEFAULT now(),
     payload_hash   text             NOT NULL,
     PRIMARY KEY (profile_type, interval_start, payload_hash),
-    CHECK (value >= 0)
+    -- An upper bound also refuses NaN and Infinity, which Postgres sorts above every number.
+    CHECK (value >= 0 AND value < 1000000)
 );
 
 CREATE TABLE raw.metering_point (
@@ -47,7 +61,8 @@ CREATE TABLE raw.metering_point (
     received_at    timestamptz      NOT NULL DEFAULT now(),
     payload_hash   text             NOT NULL,
     PRIMARY KEY (metering_point, valid_from, payload_hash),
-    CHECK (annual_kwh > 0)
+    -- An upper bound also refuses NaN and Infinity, which Postgres sorts above every number.
+    CHECK (annual_kwh > 0 AND annual_kwh < 1000000000)
 );
 
 -- Our customers only. A correction is a new row with a higher version, never an update.
@@ -64,7 +79,8 @@ CREATE TABLE raw.meter_reading (
     received_at     timestamptz      NOT NULL DEFAULT now(),
     payload_hash    text             NOT NULL,
     PRIMARY KEY (metering_point, interval_start, payload_hash),
-    CHECK (consumption_kwh >= 0),
+    -- An upper bound also refuses NaN and Infinity, which Postgres sorts above every number.
+    CHECK (consumption_kwh >= 0 AND consumption_kwh < 1000000),
     CHECK (allocated_kwh >= 0),
     CHECK (allocated_kwh <= consumption_kwh),
     CHECK (version >= 1)
@@ -84,8 +100,9 @@ CREATE TABLE raw.community_interval (
     received_at     timestamptz      NOT NULL DEFAULT now(),
     payload_hash    text             NOT NULL,
     PRIMARY KEY (interval_start, payload_hash),
-    CHECK (generation_kwh >= 0),
-    CHECK (consumption_kwh >= 0),
+    -- An upper bound also refuses NaN and Infinity, which Postgres sorts above every number.
+    CHECK (generation_kwh >= 0 AND generation_kwh < 1000000),
+    CHECK (consumption_kwh >= 0 AND consumption_kwh < 1000000),
     CHECK (version >= 1)
 ) WITH (
     timescaledb.hypertable,

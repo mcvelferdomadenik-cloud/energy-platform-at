@@ -26,7 +26,12 @@ DBT_ENV = ("WAREHOUSE_HOST", "WAREHOUSE_PORT", "WAREHOUSE_DBT_PASSWORD", "POSTGR
     start_date=pendulum.datetime(2026, 9, 1, tz=VIENNA),
     catchup=False,
     max_active_runs=1,
-    default_args={"retries": 1, "retry_delay": timedelta(minutes=10)},
+    default_args={
+        "retries": 1,
+        "retry_delay": timedelta(minutes=10),
+        # With one active run at a time, a build that hangs would block every later day in silence.
+        "execution_timeout": timedelta(hours=1),
+    },
     tags=["dbt", "warehouse"],
 )
 def dbt_build():

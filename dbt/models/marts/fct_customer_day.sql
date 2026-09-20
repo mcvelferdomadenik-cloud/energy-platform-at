@@ -5,13 +5,13 @@
 with per_day as (
 
     select metering_point,
-           (interval_start at time zone 'Europe/Vienna')::date as delivery_day,
+           delivery_day,
            count(*)             as intervals_received,
            sum(consumption_kwh) as consumption_kwh,
            sum(allocated_kwh)   as allocated_kwh,
            max(version)         as latest_version,
            max(delivered_at)    as last_delivered_at
-    from {{ ref('stg_meter_reading') }}
+    from {{ ref('fct_community_allocation') }}
     group by metering_point, delivery_day
 
 ),

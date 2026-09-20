@@ -26,7 +26,8 @@ from megavolt.warehouse import (
 )
 
 ZONE = "10YAT-APG------L"
-POINT = PricePoint(datetime(2026, 9, 11, 0, 0, tzinfo=UTC), 177.39)
+QUARTER = timedelta(minutes=15)
+POINT = PricePoint(datetime(2026, 9, 11, 0, 0, tzinfo=UTC), 177.39, QUARTER)
 PROFILE = ProfilePoint("H0", datetime(2025, 6, 21, 10, 30, tzinfo=UTC), 0.127)
 READING = Reading(
     "AT09999908430BUZOSQIZOKT57LP7GYW2",
@@ -47,12 +48,12 @@ def test_the_same_delivery_always_gets_the_same_fingerprint():
 
 
 def test_a_corrected_price_gets_a_different_fingerprint():
-    corrected = PricePoint(POINT.interval_start, 165.00)
+    corrected = PricePoint(POINT.interval_start, 165.00, QUARTER)
     assert payload_hash(ZONE, corrected) != payload_hash(ZONE, POINT)
 
 
 def test_the_same_price_in_another_interval_gets_a_different_fingerprint():
-    later = PricePoint(datetime(2026, 9, 11, 0, 15, tzinfo=UTC), POINT.price_eur_mwh)
+    later = PricePoint(datetime(2026, 9, 11, 0, 15, tzinfo=UTC), POINT.price_eur_mwh, QUARTER)
     assert payload_hash(ZONE, later) != payload_hash(ZONE, POINT)
 
 
@@ -64,7 +65,7 @@ def test_missing_connection_string_explains_how_to_fix_it(monkeypatch):
 
 def test_storing_nothing_is_refused_rather_than_quietly_accepted():
     with pytest.raises(WarehouseError, match="empty set"):
-        store_day_ahead_prices([], ZONE, timedelta(minutes=15))
+        store_day_ahead_prices([], ZONE)
 
 
 def test_the_same_profile_value_always_gets_the_same_fingerprint():
@@ -157,36 +158,43 @@ def test_an_empty_stream_batch_is_refused_before_the_database_is_touched(monkeyp
 
 # --- imbalance prices and actual load ----------------------------------------------------------
 
-IMBALANCE = ImbalancePricePoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), "A04", 103.75, "A01")
-LOAD = LoadPoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), 5429.2)
+IMBALANCE = ImbalancePricePoint(
+    datetime(2025, 3, 30, 23, 0, tzinfo=UTC), "A04", 103.75, "A01", QUARTER
+)
+LOAD = LoadPoint(datetime(2025, 3, 30, 23, 0, tzinfo=UTC), 5429.2, QUARTER)
 
 
 def test_an_imbalance_price_that_becomes_final_is_a_new_delivery():
-    final = ImbalancePricePoint(IMBALANCE.interval_start, "A04", 103.75, "A02")
+    final = ImbalancePricePoint(IMBALANCE.interval_start, "A04", 103.75, "A02", QUARTER)
     assert imbalance_payload_hash(ZONE, final) != imbalance_payload_hash(ZONE, IMBALANCE)
 
 
 def test_the_two_directions_of_one_interval_never_collide():
-    short = ImbalancePricePoint(IMBALANCE.interval_start, "A05", 103.75, "A01")
+    short = ImbalancePricePoint(IMBALANCE.interval_start, "A05", 103.75, "A01", QUARTER)
     assert imbalance_payload_hash(ZONE, short) != imbalance_payload_hash(ZONE, IMBALANCE)
 
 
 def test_a_re_fetched_unchanged_imbalance_price_inserts_nothing():
-    again = ImbalancePricePoint(IMBALANCE.interval_start, "A04", 103.75, "A01")
+    again = ImbalancePricePoint(IMBALANCE.interval_start, "A04", 103.75, "A01", QUARTER)
     assert imbalance_payload_hash(ZONE, again) == imbalance_payload_hash(ZONE, IMBALANCE)
 
 
 def test_a_revised_load_value_is_a_new_delivery_and_a_repeat_is_not():
-    assert load_payload_hash(ZONE, LoadPoint(LOAD.interval_start, 5429.2)) == load_payload_hash(
-        ZONE, LOAD
-    )
-    assert load_payload_hash(ZONE, LoadPoint(LOAD.interval_start, 5430.0)) != load_payload_hash(
-        ZONE, LOAD
-    )
+    assert load_payload_hash(
+        ZONE, LoadPoint(LOAD.interval_start, 5429.2, QUARTER)
+    ) == load_payload_hash(ZONE, LOAD)
+    assert load_payload_hash(
+        ZONE, LoadPoint(LOAD.interval_start, 5430.0, QUARTER)
+    ) != load_payload_hash(ZONE, LOAD)
 
 
 def test_storing_no_imbalance_prices_or_load_is_refused():
     with pytest.raises(WarehouseError, match="empty set"):
-        store_imbalance_prices([], ZONE, timedelta(minutes=15))
+        store_imbalance_prices([], ZONE)
     with pytest.raises(WarehouseError, match="empty set"):
-        store_actual_load([], ZONE, timedelta(minutes=15))
+        store_actual_load([], ZONE)
+
+
+def test_the_same_price_for_an_hour_and_for_a_quarter_hour_are_different_deliveries():
+    hourly = PricePoint(POINT.interval_start, POINT.price_eur_mwh, timedelta(hours=1))
+    assert payload_hash(ZONE, hourly) != payload_hash(ZONE, POINT)

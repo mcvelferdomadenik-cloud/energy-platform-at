@@ -50,7 +50,7 @@ DECIMALS = 4
 
 PROFILE_NORMALISATION = 1000.0
 
-# --- How badly the data arrives. Signed off 2026-09-12, modelling assumptions, not measurements.
+# --- How badly the data arrives. Modelling assumptions of this simulation, not measurements.
 # The grid operator sends previous-day values overnight, but not all of them and not all correct.
 
 # A point-day that misses its slot and turns up one to three days later.
