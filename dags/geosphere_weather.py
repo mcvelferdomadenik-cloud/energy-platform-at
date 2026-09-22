@@ -1,4 +1,7 @@
-"""Store hourly temperature and global radiation for the community's location, once a day.
+"""Store hourly temperature and global radiation where the community's plant stands, once a day.
+
+Runs before the meter stream, which generates from yesterday's radiation; the analysis is about an
+hour behind the clock, so yesterday is complete by then.
 
 Source: GeoSphere Austria, INCA analysis, CC BY 4.0. The whole window is one request, so a backfill
 is this same DAG with a larger `window_days`: a year still costs one of the 240 requests the data
@@ -23,7 +26,7 @@ WINDOW_DAYS = 10
 
 @dag(
     dag_id="geosphere_weather",
-    schedule="0 7 * * *",
+    schedule="30 4 * * *",
     start_date=pendulum.datetime(2026, 9, 1, tz="Europe/Vienna"),
     catchup=False,
     max_active_runs=1,
@@ -44,7 +47,9 @@ def geosphere_weather():
         # A manual run has no logical_date in Airflow 3, only run_after, which is a plain datetime.
         moment = pendulum.instance(context.get("logical_date") or context["dag_run"].run_after)
         end = moment.in_timezone("UTC").start_of("hour")
+        # From local midnight, so the oldest day of a backfill is never stored half and frozen so.
         start = end.subtract(days=int(context["params"]["window_days"]))
+        start = start.in_timezone("Europe/Vienna").start_of("day").in_timezone("UTC")
         points, odd = in_range(weather(start, end, LATITUDE, LONGITUDE))
         stored = store_weather(points, DATASET, LATITUDE, LONGITUDE)
         print(f"{start:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M}: {len(points)} values, {stored} new")

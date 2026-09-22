@@ -1,5 +1,6 @@
 """Tests for the community registry. Pure functions, no database and no network."""
 
+import hashlib
 from collections import Counter
 
 import pytest
@@ -10,6 +11,8 @@ from megavolt.community import (
     GENERATION_SHARE,
     METERING_POINT_LENGTH,
     OUR_CUSTOMERS,
+    PLANT_POSTAL_CODE,
+    POSTAL_CODES,
     SEGMENTS,
     members,
 )
@@ -65,6 +68,36 @@ def test_every_metering_point_is_a_thirty_three_character_austrian_identifier():
         assert len(member.metering_point) == METERING_POINT_LENGTH
         assert member.metering_point.startswith("AT")
         assert member.metering_point.isalnum()
+
+
+def test_members_live_in_every_postal_code_of_the_community_and_nowhere_else():
+    codes = Counter(member.metering_point[8:13] for member in CONSUMERS)
+    assert set(codes) == {f"0{code}" for code in POSTAL_CODES}
+    assert max(codes, key=codes.get) == "0" + max(POSTAL_CODES, key=POSTAL_CODES.get)
+
+
+def test_the_postal_code_shares_add_up_to_the_whole_community():
+    assert sum(POSTAL_CODES.values()) == pytest.approx(1.0)
+
+
+def test_the_plant_stands_in_its_own_postal_code():
+    assert REGISTRY[-1].metering_point[8:13] == f"0{PLANT_POSTAL_CODE}"
+
+
+def test_where_members_live_does_not_change_what_they_consume():
+    # The sizes that the forecast's community figures were taken from, for the default seed.
+    total = sum(member.annual_kwh for member in members("megavolt")[:-1])
+    assert total == pytest.approx(4_560_200, abs=50)
+
+
+def test_where_members_live_does_not_change_who_is_ours_or_how_large_anybody_is():
+    # The fingerprint of the registry as it was before members had postal codes of their own.
+    text = "|".join(
+        f"{m.annual_kwh}:{int(m.ours)}:{m.meter_id}:{m.profile_type}" for m in members("megavolt")
+    )
+    assert hashlib.sha256(text.encode()).hexdigest() == (
+        "a006228b606031d6bb8f19eea8292d83ed8cbcda3b307af0214494d01d2b2a77"
+    )
 
 
 def test_no_two_members_share_a_metering_point_or_a_meter():

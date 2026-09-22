@@ -7,11 +7,11 @@
 -- morning after each day, and only days up to D-2. That is a little pessimistic (a reading that
 -- came a day late is known by then and is not used) and it can never look into the future.
 --
--- It forecasts what the customer took AFTER the community's share, so on real data the weather of
--- the last weeks would be in it, which the standard profile knows nothing about. In THIS
--- simulation it cannot help: cloud cover is drawn anew for every day, so yesterday's weather says
--- nothing about tomorrow's, and an average of recent days can only add noise and lag behind a
--- season that is turning.
+-- It forecasts what the customer took AFTER the community's share, so the weather of the last weeks
+-- is in it, which the standard profile knows nothing about: the simulated plant follows the
+-- radiation that was really measured, and a sunny or a cold spell lasts as long as it really did.
+-- What it cannot know is tomorrow: an average of two weeks lags behind a season that is turning and
+-- is wrong on the first overcast day after a sunny week.
 --
 -- Days are matched by LOCAL time, because consumption follows the clock. The sun does not: for two
 -- weeks after a clock change the history is one solar hour off. Public holidays are not treated as

@@ -104,6 +104,36 @@ WHERE profile_year = %s AND profile_type = ANY(%s)
 ORDER BY profile_type, interval_start, received_at DESC, payload_hash DESC
 """
 
+# Weather as the simulator may see it: the same answer for a day whenever it is asked. That takes
+# two rules, because raw only ever grows. The FIRST value received for an hour counts, never a
+# later revision. And a day is frozen the first moment it has values of its own AND something
+# after it has arrived: an hour of that day received later stays a hole for good. Both conditions,
+# because a backfill brings old days after newer ones are already there. A day nothing has arrived
+# after returns no rows at all. An hour belongs to the local day it ends: 01:00 to midnight.
+# The window is applied only at the end, so a day is never judged on part of its hours: cut early,
+# the first day of the window would be frozen on one hour and answer differently from one run day
+# to the next.
+_SELECT_FIRST_WEATHER = """
+WITH first AS (
+    SELECT DISTINCT ON (parameter, valid_at) parameter, valid_at, value, received_at,
+           ((valid_at - interval '1 hour') AT TIME ZONE 'Europe/Vienna')::date AS day
+    FROM raw.weather_observation
+    WHERE dataset = %s AND parameter = ANY(%s) AND latitude = %s AND longitude = %s
+    ORDER BY parameter, valid_at, received_at, payload_hash
+), frozen AS (
+    SELECT day, min(received_at) AS own_first,
+           min(min(received_at)) OVER (
+               ORDER BY day ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING
+           ) AS later_first
+    FROM first
+    GROUP BY day
+)
+SELECT parameter, valid_at, value
+FROM first JOIN frozen USING (day)
+WHERE valid_at BETWEEN %s AND %s
+  AND later_first IS NOT NULL AND received_at <= greatest(own_first, later_first)
+"""
+
 _INSERT_METERING_POINT = """
 INSERT INTO raw.metering_point
     (metering_point, valid_from, profile_type, segment, annual_kwh, meter_id,
@@ -383,6 +413,27 @@ def load_profiles(profile_year: int, types: Sequence[str]) -> dict[str, dict[dat
             f"no {profile_year} profile stored for {', '.join(empty)} - run the apcs DAG first"
         )
     return profiles
+
+
+def load_weather(
+    start: datetime,
+    end: datetime,
+    dataset: str,
+    latitude: float,
+    longitude: float,
+    parameters: Sequence[str],
+) -> dict[str, dict[datetime, float]]:
+    """Hourly values by parameter for one place, as they stood when each day was first complete."""
+    with psycopg.connect(dsn()) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            _SELECT_FIRST_WEATHER, (dataset, list(parameters), latitude, longitude, start, end)
+        )
+        rows = cursor.fetchall()
+
+    weather: dict[str, dict[datetime, float]] = {name: {} for name in parameters}
+    for parameter, valid_at, value in rows:
+        weather[parameter][valid_at] = value
+    return weather
 
 
 def store_metering_points(points: Sequence[Member], valid_from: datetime) -> int:

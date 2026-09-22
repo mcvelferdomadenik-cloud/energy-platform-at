@@ -8,11 +8,21 @@ duplicating it.
 The noise is not decoration. If every household were an exact multiple of one profile and the
 plant followed E1 exactly, then `allocated_i` would be exactly proportional to `C_i` in every
 interval and forecasting our residual would be arithmetic rather than a problem. Per-day level
-factors, per-interval jitter and per-day cloud cover are what make the residual worth modelling.
+factors and per-interval jitter on the consumption, and the measured radiation over the plant, are
+what make the residual worth modelling.
 
-Every multiplicative factor is drawn with mean exactly 1, so the annual totals stay on the figures
-chosen for the community in expectation. They are not renormalised to hit them exactly: that
-would need the whole year simulated before any single day could be produced.
+Two things are not drawn from the seed but read from the weather GeoSphere Austria measured at
+the plant: generation follows the global radiation, and everybody's consumption rises on a day
+colder than the week before it and falls on a milder one. A sunny or a cold spell therefore lasts
+as long as it really did, and yesterday says something about tomorrow. The weather is read as it
+stood when the day was first complete, which keeps a replay identical even if the analysis is
+revised or filled in later.
+
+Every drawn factor has a mean of exactly 1, so annual consumption stays on the figures chosen for
+the community in expectation. The two weather terms are not drawn and promise less: the heating
+factor is bounded, and generation meets the plant's annual figure only about, and only in a year
+as sunny as the one the performance ratio was chosen on. Nothing is renormalised to hit the
+figures exactly: that would need the whole year simulated before any single day could be produced.
 """
 
 from __future__ import annotations
@@ -22,7 +32,13 @@ import random
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta
 
-from megavolt.community import GENERATION_SEGMENT, VALID_FROM, VIENNA, Member
+from megavolt.community import (
+    GENERATION_SEGMENT,
+    VALID_FROM,
+    VIENNA,
+    YIELD_KWH_PER_KWP,
+    Member,
+)
 from megavolt.readings import (
     READINGS_TOPIC,
     RESOLUTION,
@@ -40,10 +56,25 @@ COMMUNITY_KEY = "community"
 DAY_LEVEL_SIGMA = 0.12
 # Spread within a day: a kettle, a car charging, a machine starting.
 INTERVAL_SIGMA = 0.08
-# Cloud cover over the plant. Wider, and clipped, because a day is either sunny or it is not.
-CLOUD_SIGMA = 0.35
-CLOUD_FLOOR = 0.10
-CLOUD_CEILING = 1.30
+# Output of a plant = peak power x radiation / 1000 W/m2 x performance ratio, the usual yield
+# formula (e.g. IEC 61724-1). The ratio is a modelling assumption, chosen so that the radiation
+# measured in 2025 gives about the 1000 kWh/kWp the plant was sized with.
+# ponytail: horizontal radiation, no panel tilt and no temperature loss. Winter output comes out
+# low; use a transposition model if a plant is ever modelled for its own sake.
+STANDARD_IRRADIANCE_W_M2 = 1000.0
+PERFORMANCE_RATIO = 0.81
+HOUR = timedelta(hours=1)
+
+# Heating. Modelling assumptions: below the heating limit every degree colder than the week
+# before adds this share to everybody's consumption, within bounds. The limit follows the usual
+# 15 C threshold of Eurostat's heating degree days; the share per degree is chosen, not measured.
+# ponytail: one factor for the whole community, street lighting included. Make it per segment
+# if heating is ever modelled per segment.
+RADIATION, TEMPERATURE = "GL", "T2M"
+HEATING_LIMIT_C = 15.0
+HEATING_SHARE_PER_DEGREE = 0.015
+HEATING_MEMORY_DAYS = 7
+HEATING_BOUNDS = (0.85, 1.20)
 
 # Wh precision on a kWh figure, which is what a real meter delivers.
 DECIMALS = 4
@@ -118,15 +149,40 @@ def _profile_values(
         raise SimulationError(f"the {profile_type} profile has no value for {exc.args[0]}") from exc
 
 
+def _heating_need(temperature: dict[datetime, float], intervals: tuple[datetime, ...]) -> float:
+    """How far one day's mean temperature lay below the heating limit, in degrees."""
+    measured = [
+        temperature[moment]
+        for moment in (intervals[0] + step * HOUR for step in range(len(intervals) // 4))
+        if moment in temperature
+    ]
+    if not measured:
+        day = intervals[0].astimezone(VIENNA).date()
+        raise SimulationError(f"no temperature stored for {day} - run the weather DAG first")
+    return max(0.0, HEATING_LIMIT_C - sum(measured) / len(measured))
+
+
+def heating_level(day: date, temperature: dict[datetime, float]) -> float:
+    """The factor on everybody's consumption: above 1 on a day colder than the week before it."""
+    before = [
+        _heating_need(temperature, day_intervals(day - timedelta(days=back)))
+        for back in range(1, HEATING_MEMORY_DAYS + 1)
+    ]
+    extra = _heating_need(temperature, day_intervals(day)) - sum(before) / len(before)
+    lowest, highest = HEATING_BOUNDS
+    return min(max(1.0 + HEATING_SHARE_PER_DEGREE * extra, lowest), highest)
+
+
 def consumption_series(
     member: Member,
     intervals: tuple[datetime, ...],
     profiles: dict[str, dict[datetime, float]],
     seed: str,
+    heating: float = 1.0,
 ) -> tuple[float, ...]:
     """What one member consumed in each quarter hour of one day."""
     shape = _profile_values(profiles, member.profile_type, intervals)
-    scale = member.annual_kwh / PROFILE_NORMALISATION
+    scale = member.annual_kwh / PROFILE_NORMALISATION * heating
 
     day = intervals[0].astimezone(VIENNA).date()
     level = _unit_lognormal(rng(seed, "day_level", member.metering_point, day), DAY_LEVEL_SIGMA)
@@ -138,24 +194,52 @@ def consumption_series(
     )
 
 
+def _irradiance(radiation: dict[datetime, float], interval: datetime) -> float | None:
+    """Mean radiation over one quarter hour, in W/m2, or None where an hour was never measured.
+
+    The stored values are read as the state at the full hour (the data suggests it: zero just
+    before sunrise and just after sunset; the documentation does not say), so the quarter hour
+    takes the straight line between its two neighbours, read at its midpoint.
+    """
+    before = interval.replace(minute=0, second=0, microsecond=0)
+    first, second = radiation.get(before), radiation.get(before + HOUR)
+    if first is None or second is None:
+        return None
+    weight = (interval + RESOLUTION / 2 - before) / HOUR
+    return first + (second - first) * weight
+
+
 def generation_series(
     plant: Member,
     intervals: tuple[datetime, ...],
     profiles: dict[str, dict[datetime, float]],
-    seed: str,
+    radiation: dict[datetime, float],
 ) -> tuple[float, ...]:
     """What the community plant generated in each quarter hour of one day."""
     if plant.segment != GENERATION_SEGMENT:
         raise SimulationError(f"{plant.metering_point} is not the generation point")
+    # A day the weather has not been fetched for must fail rather than fall back: the fallback
+    # would be delivered, and the replay after the fetch would then disagree with it.
+    day_end = intervals[-1] + RESOLUTION
+    if not any(intervals[0] < moment <= day_end for moment in radiation):
+        raise SimulationError(f"no radiation stored up to {day_end} - run the weather DAG first")
 
     shape = _profile_values(profiles, plant.profile_type, intervals)
     scale = plant.annual_kwh / PROFILE_NORMALISATION
+    peak_kw = plant.annual_kwh / YIELD_KWH_PER_KWP
+    hours = RESOLUTION / HOUR
 
-    day = intervals[0].astimezone(VIENNA).date()
-    clouds = _unit_lognormal(rng(seed, "clouds", day), CLOUD_SIGMA)
-    clouds = min(max(clouds, CLOUD_FLOOR), CLOUD_CEILING)
-
-    return tuple(round(value * scale * clouds, DECIMALS) for value in shape)
+    generated = []
+    for interval, standard in zip(intervals, shape, strict=True):
+        irradiance = _irradiance(radiation, interval)
+        if irradiance is None:
+            # A hole in the measurements: the standard profile, which is what settlement uses
+            # when it has no measurement either.
+            generated.append(round(standard * scale, DECIMALS))
+        else:
+            energy = peak_kw * irradiance / STANDARD_IRRADIANCE_W_M2 * PERFORMANCE_RATIO * hours
+            generated.append(round(energy, DECIMALS))
+    return tuple(generated)
 
 
 def allocate(
@@ -210,6 +294,7 @@ def simulate_day(
     day: date,
     members: tuple[Member, ...],
     profiles: dict[str, dict[datetime, float]],
+    weather: dict[str, dict[datetime, float]],
     seed: str,
 ) -> tuple[
     tuple[datetime, ...],
@@ -227,11 +312,12 @@ def simulate_day(
     if len(plants) != 1:
         raise SimulationError(f"expected exactly one generation point, found {len(plants)}")
 
+    heating = heating_level(day, weather.get(TEMPERATURE, {}))
     consumption = {
-        member.metering_point: consumption_series(member, intervals, profiles, seed)
+        member.metering_point: consumption_series(member, intervals, profiles, seed, heating)
         for member in consumers
     }
-    generation = generation_series(plants[0], intervals, profiles, seed)
+    generation = generation_series(plants[0], intervals, profiles, weather.get(RADIATION, {}))
     return intervals, consumption, allocate(consumption, generation), generation
 
 
@@ -314,6 +400,7 @@ def deliveries_for(
     run_day: date,
     members: tuple[Member, ...],
     profiles: dict[str, dict[datetime, float]],
+    weather: dict[str, dict[datetime, float]],
     seed: str,
 ) -> tuple[Delivery, ...]:
     """Everything that arrives on one day: yesterday's values, the late ones, the corrections.
@@ -340,7 +427,7 @@ def deliveries_for(
             ):
                 corrections.setdefault(day, []).append(member)
 
-    truth = _remembered(members, profiles, seed)
+    truth = _remembered(members, profiles, weather, seed)
     deliveries: list[Delivery] = [_community_delivery(run_day, truth)]
 
     for day, people in firsts.items():
@@ -361,13 +448,18 @@ def deliveries_for(
     )
 
 
-def _remembered(members: tuple[Member, ...], profiles: dict[str, dict[datetime, float]], seed: str):
+def _remembered(
+    members: tuple[Member, ...],
+    profiles: dict[str, dict[datetime, float]],
+    weather: dict[str, dict[datetime, float]],
+    seed: str,
+):
     """Simulate each day at most once: a run touches up to two weeks of consumption days."""
     remembered: dict[date, tuple] = {}
 
     def truth(day: date) -> tuple:
         if day not in remembered:
-            remembered[day] = simulate_day(day, members, profiles, seed)
+            remembered[day] = simulate_day(day, members, profiles, weather, seed)
         return remembered[day]
 
     return truth
@@ -495,15 +587,27 @@ def _profiles_for(run_day: date, members: tuple[Member, ...]):
     return profiles
 
 
+def _weather_for(run_day: date) -> dict[str, dict[datetime, float]]:
+    """The weather measured at the plant on every day a run can reach back into."""
+    from megavolt.community import LATITUDE, LONGITUDE
+    from megavolt.geosphere import DATASET
+    from megavolt.warehouse import load_weather
+
+    earliest = day_intervals(run_day - timedelta(days=MAX_LOOKBACK_DAYS + HEATING_MEMORY_DAYS))[0]
+    latest = day_intervals(run_day)[0] + HOUR
+    return load_weather(earliest, latest, DATASET, LATITUDE, LONGITUDE, (RADIATION, TEMPERATURE))
+
+
 def _delivery_day(delivery_date: date) -> tuple[str, tuple[Member, ...], tuple[Delivery, ...]]:
-    """Everything one delivery day sends, computed from the seed and the stored profiles."""
+    """Everything one delivery day sends, computed from the seed and what the warehouse holds."""
     from megavolt.community import members as registry
     from megavolt.community import seed as default_seed
 
     seed = default_seed()
     people = registry(seed)
     profiles = _profiles_for(delivery_date, people)
-    return seed, people, deliveries_for(delivery_date, people, profiles, seed)
+    weather = _weather_for(delivery_date)
+    return seed, people, deliveries_for(delivery_date, people, profiles, weather, seed)
 
 
 def deliver(delivery_date: date) -> tuple[int, int]:

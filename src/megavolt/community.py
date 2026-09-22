@@ -24,6 +24,7 @@ import hashlib
 import math
 import os
 import random
+from collections import Counter
 from dataclasses import dataclass, replace
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -32,10 +33,21 @@ SEED_ENV = "SIMULATOR_SEED"
 DEFAULT_SEED = "megavolt"
 
 GRID_OPERATOR = "099999"
-POSTAL_CODE = "08430"
-# Where the weather is read: the centre of that postal area, two decimals, which is about a
-# kilometre. A village, not an address.
-LATITUDE, LONGITUDE = 46.78, 15.54
+# A citizen energy community is not bound to one place, so its members spread over neighbouring
+# postal codes south of Vienna. The shares are a modelling assumption, roughly by population.
+POSTAL_CODES = {
+    "2340": 0.30,
+    "2345": 0.18,
+    "2344": 0.14,
+    "2351": 0.14,
+    "2353": 0.14,
+    "2352": 0.06,
+    "2361": 0.04,
+}
+# Where the community's plant stands and where its weather is read: two decimals, which is about
+# a kilometre. An industrial area, not an address.
+PLANT_POSTAL_CODE = "2351"
+LATITUDE, LONGITUDE = 48.08, 16.33
 METERING_POINT_LENGTH = 33
 
 VIENNA = ZoneInfo("Europe/Vienna")
@@ -92,11 +104,17 @@ def seed() -> str:
     return os.environ.get(SEED_ENV, "").strip() or DEFAULT_SEED
 
 
-def metering_point(index: int, community_seed: str) -> str:
+def postal_code(index: int, community_seed: str) -> str:
+    """Where one member lives, drawn apart from every other draw so nothing else shifts."""
+    rng = random.Random(f"{community_seed}|postal_code|{index}")  # noqa: S311 - see _annual_kwh
+    return rng.choices(list(POSTAL_CODES), weights=list(POSTAL_CODES.values()))[0]
+
+
+def metering_point(index: int, community_seed: str, postal: str) -> str:
     """Build one Austrian metering point identifier, deterministic in the index."""
     digest = hashlib.sha256(f"{community_seed}|metering_point|{index}".encode()).digest()
     tail = base64.b32encode(digest).decode()[:20]
-    return f"AT{GRID_OPERATOR}{POSTAL_CODE}{tail}"
+    return f"AT{GRID_OPERATOR}{postal:0>5}{tail}"
 
 
 def _annual_kwh(rng: random.Random, spec: Segment) -> float:
@@ -117,7 +135,9 @@ def members(community_seed: str | None = None) -> tuple[Member, ...]:
             index = len(consumers)
             consumers.append(
                 Member(
-                    metering_point=metering_point(index, community_seed),
+                    metering_point=metering_point(
+                        index, community_seed, postal_code(index, community_seed)
+                    ),
                     profile_type=spec.profile_type,
                     segment=spec.segment,
                     annual_kwh=_annual_kwh(rng, spec),
@@ -137,7 +157,7 @@ def _generation_point(consumers: list[Member], community_seed: str) -> Member:
     index = len(consumers)
     annual = round(GENERATION_SHARE * sum(member.annual_kwh for member in consumers), 1)
     return Member(
-        metering_point=metering_point(index, community_seed),
+        metering_point=metering_point(index, community_seed, PLANT_POSTAL_CODE),
         profile_type=GENERATION_PROFILE,
         segment=GENERATION_SEGMENT,
         annual_kwh=annual,
@@ -167,6 +187,8 @@ def main() -> None:
     print(f"  implied plant  {kwp:>19.0f} kWp at ~{YIELD_KWH_PER_KWP:.0f} kWh/kWp")
     first = registry[0].metering_point
     print(f"\n  first metering point {first} ({len(first)} chars)")
+    by_code = Counter(member.metering_point[8:13] for member in consumers)
+    print(f"  members by postal code {dict(sorted(by_code.items()))}")
 
 
 if __name__ == "__main__":
