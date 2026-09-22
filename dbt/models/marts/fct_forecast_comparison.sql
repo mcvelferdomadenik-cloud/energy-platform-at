@@ -2,11 +2,13 @@
 -- same prices, same readings; only the forecast behind the purchase differs, so the difference
 -- between two methods is what the better forecast is worth ON THIS DATA.
 --
--- Read the ranking with care. The readings are simulated from the very load profiles the standard
--- profile method forecasts with, so that method is close to the process that made the data, and
--- the simulated weather has no memory from one day to the next. A method that learns from recent
--- days therefore cannot win here. That says how the simulator works; it says nothing about how
--- the two would compare on real meter data.
+-- Read the ranking with care, in two ways. The consumption is simulated from the very load
+-- profiles the standard profile method forecasts with, so on that side the method is close to the
+-- process that made the data; only the community's generation and the heating follow the weather
+-- that was really measured. And a smaller volume error is not a smaller cost: a method that buys
+-- too much is paid the imbalance price for its surplus, and in a month where that price sits
+-- above the day-ahead price, being wrong in that direction earns money. That is luck with the
+-- sign of the error, not forecasting skill.
 --
 -- As everywhere, a purchase is compared with a delivery only for customers whose reading has
 -- arrived. The direction that picks the imbalance price is each method's own: a method that buys

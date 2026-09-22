@@ -4,7 +4,7 @@ The profiles are synthetic here on purpose: these tests are about the arithmetic
 determinism, not about the APCS file, which `test_apcs.py` already covers.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -12,9 +12,11 @@ from megavolt.community import GENERATION_PROFILE, GENERATION_SEGMENT, VALID_FRO
 from megavolt.readings import decode, encode, readings_of, utc_text
 from megavolt.simulate import (
     COMMUNITY_KEY,
+    HOUR,
     LATE_DAYS,
     MAX_LOOKBACK_DAYS,
     METER_LETTERS,
+    PERFORMANCE_RATIO,
     SimulationError,
     _correction,
     _delivered_at,
@@ -27,6 +29,7 @@ from megavolt.simulate import (
     delay_days,
     deliveries_for,
     generation_series,
+    heating_level,
     is_corrected,
     is_missing,
     meter_history,
@@ -51,6 +54,16 @@ PLANT = Member(
     "MV-000003-A",
     False,
 )
+
+
+def flat_radiation(watts=500.0, start=datetime(2025, 2, 1, tzinfo=UTC), days=45):
+    """The same radiation in every hour, over every day these tests reach into."""
+    return {start + step * HOUR: watts for step in range(days * 24)}
+
+
+RADIATION = flat_radiation()
+# Ten degrees in every hour: no day is colder than the week before it, so heating changes nothing.
+WEATHER = {"GL": RADIATION, "T2M": flat_radiation(10.0)}
 
 
 def profiles(house=0.03, plant=0.05):
@@ -145,12 +158,131 @@ def test_a_day_the_profile_does_not_cover_is_refused_rather_than_filled_in():
 
 def test_a_consuming_member_cannot_be_used_as_the_plant():
     with pytest.raises(SimulationError, match="is not the generation point"):
-        generation_series(HOUSE, INTERVALS, profiles(), SEED)
+        generation_series(HOUSE, INTERVALS, profiles(), RADIATION)
 
 
 def test_a_registry_without_exactly_one_plant_is_refused():
     with pytest.raises(SimulationError, match="exactly one generation point"):
-        simulate_day(DAY, (HOUSE, SHOP), profiles(), SEED)
+        simulate_day(DAY, (HOUSE, SHOP), profiles(), WEATHER, SEED)
+
+
+# --- generation: the measured radiation, not a draw --------------------------------------------
+
+
+def test_generation_is_peak_power_times_radiation_times_the_performance_ratio():
+    # 2000 kWh a year at 1000 kWh/kWp is a 2 kWp plant; 500 W/m2 is half of standard radiation.
+    expected = 2.0 * 0.5 * PERFORMANCE_RATIO * 0.25
+    assert set(generation_series(PLANT, INTERVALS, profiles(), RADIATION)) == {round(expected, 4)}
+
+
+def test_a_quarter_hour_reads_the_line_between_its_two_hours_at_its_midpoint():
+    radiation = flat_radiation(0.0)
+    radiation[INTERVALS[0] + HOUR] = 400.0
+    first, second, *_ = generation_series(PLANT, INTERVALS, profiles(), radiation)
+    assert first == pytest.approx(2.0 * 0.050 * PERFORMANCE_RATIO * 0.25, abs=1e-4)
+    assert second == pytest.approx(2.0 * 0.150 * PERFORMANCE_RATIO * 0.25, abs=1e-4)
+
+
+def test_a_sunny_day_generates_more_than_an_overcast_one():
+    sunny = generation_series(PLANT, INTERVALS, profiles(), flat_radiation(600.0))
+    overcast = generation_series(PLANT, INTERVALS, profiles(), flat_radiation(80.0))
+    assert sum(sunny) > 5 * sum(overcast)
+
+
+def test_an_hour_that_was_never_measured_falls_back_to_the_standard_profile():
+    radiation = dict(RADIATION)
+    del radiation[INTERVALS[4]]
+    generated = generation_series(PLANT, INTERVALS, profiles(plant=0.05), radiation)
+    # The hour before the hole and the hour after it both lean on the missing value.
+    assert set(generated[:8]) == {round(0.05 * 2000.0 / 1000.0, 4)}
+    assert generated[8] == generated[-1] != generated[0]
+
+
+def test_a_day_whose_weather_has_not_been_fetched_is_refused_rather_than_guessed():
+    # The hour a day starts on belongs to the day before, so it is not this day's weather.
+    before = {moment: value for moment, value in RADIATION.items() if moment <= INTERVALS[0]}
+    with pytest.raises(SimulationError, match="run the weather DAG first"):
+        generation_series(PLANT, INTERVALS, profiles(), before)
+    with pytest.raises(SimulationError, match="run the weather DAG first"):
+        generation_series(PLANT, INTERVALS, profiles(), {})
+
+
+def test_weather_of_later_days_does_not_stand_in_for_a_day_that_has_none():
+    around = {m: v for m, v in RADIATION.items() if not INTERVALS[0] < m <= INTERVALS[-1] + HOUR}
+    with pytest.raises(SimulationError, match="run the weather DAG first"):
+        generation_series(PLANT, INTERVALS, profiles(), around)
+
+
+def test_one_measured_hour_is_enough_for_a_day_and_the_rest_are_holes():
+    one_hour = {INTERVALS[0]: 500.0, INTERVALS[0] + HOUR: 500.0}
+    generated = generation_series(PLANT, INTERVALS, profiles(), one_hour)
+    assert generated[0] != generated[4] == round(0.05 * 2000.0 / 1000.0, 4)
+
+
+def test_generation_does_not_depend_on_the_seed():
+    one = simulate_day(DAY, (HOUSE, SHOP, PLANT), profiles(), WEATHER, SEED)[3]
+    other = simulate_day(DAY, (HOUSE, SHOP, PLANT), profiles(), WEATHER, "other-seed")[3]
+    assert one == other
+
+
+# --- heating: a cold day after a mild week ----------------------------------------------------
+
+
+def cold_snap(degrees: float) -> dict:
+    """Ten degrees for weeks, then one day at another temperature."""
+    temperature = flat_radiation(10.0)
+    for moment in temperature:
+        if INTERVALS[0] <= moment < INTERVALS[-1]:
+            temperature[moment] = degrees
+    return temperature
+
+
+def test_a_day_like_the_week_before_it_changes_nothing():
+    assert heating_level(DAY, flat_radiation(10.0)) == 1.0
+
+
+def test_a_day_colder_than_the_week_before_it_raises_consumption_by_the_share_per_degree():
+    assert heating_level(DAY, cold_snap(0.0)) == pytest.approx(1.15)
+    assert heating_level(DAY, cold_snap(12.0)) == pytest.approx(0.97)
+
+
+def test_above_the_heating_limit_the_temperature_does_not_matter():
+    warm = {moment: 22.0 for moment in flat_radiation()}
+    for moment in warm:
+        if INTERVALS[0] <= moment < INTERVALS[-1]:
+            warm[moment] = 30.0
+    assert heating_level(DAY, warm) == 1.0
+
+
+def test_a_short_day_averages_its_twenty_three_hours_and_no_hour_of_the_next_day():
+    short = date(2025, 3, 30)
+    hours = day_intervals(short)
+    temperature = flat_radiation(10.0, start=datetime(2025, 3, 1, tzinfo=UTC))
+    for moment in temperature:
+        if moment >= hours[-1] + timedelta(minutes=15):
+            temperature[moment] = -30.0
+    assert len(hours) == 92
+    assert heating_level(short, temperature) == 1.0
+
+
+def test_the_heating_factor_stays_within_its_bounds():
+    assert heating_level(DAY, cold_snap(-40.0)) == 1.20
+
+
+def test_a_cold_day_makes_everybody_consume_more_and_generates_the_same():
+    mild = simulate_day(DAY, (HOUSE, SHOP, PLANT), profiles(), WEATHER, SEED)
+    cold = simulate_day(
+        DAY, (HOUSE, SHOP, PLANT), profiles(), {"GL": RADIATION, "T2M": cold_snap(0.0)}, SEED
+    )
+    assert sum(cold[1][HOUSE.metering_point]) == pytest.approx(
+        1.15 * sum(mild[1][HOUSE.metering_point]), rel=1e-3
+    )
+    assert cold[3] == mild[3]
+
+
+def test_a_day_without_a_stored_temperature_is_refused_rather_than_guessed():
+    with pytest.raises(SimulationError, match="no temperature stored"):
+        heating_level(date(2025, 6, 1), flat_radiation(10.0))
 
 
 # --- allocation: the community's step, before ours --------------------------------------------
@@ -192,7 +324,7 @@ def test_allocation_plus_surplus_equals_generation():
         member.metering_point: consumption_series(member, INTERVALS, profiles(), SEED)
         for member in (HOUSE, SHOP)
     }
-    generation = generation_series(PLANT, INTERVALS, profiles(), SEED)
+    generation = generation_series(PLANT, INTERVALS, profiles(), RADIATION)
     allocated = allocate(consumption, generation)
     spare = surplus(generation, consumption)
 
@@ -203,7 +335,7 @@ def test_allocation_plus_surplus_equals_generation():
 
 def test_a_full_day_returns_an_allocation_for_every_consuming_member():
     intervals, consumption, allocated, generation = simulate_day(
-        DAY, (HOUSE, SHOP, PLANT), profiles(), SEED
+        DAY, (HOUSE, SHOP, PLANT), profiles(), WEATHER, SEED
     )
     assert len(intervals) == 96
     assert set(consumption) == set(allocated) == {HOUSE.metering_point, SHOP.metering_point}
@@ -232,13 +364,13 @@ def wide_profiles():
 
 
 def test_a_run_delivers_the_same_messages_every_time():
-    one = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED)
-    other = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED)
+    one = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), WEATHER, SEED)
+    other = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), WEATHER, SEED)
     assert [encode(d.payload) for d in one] == [encode(d.payload) for d in other]
 
 
 def test_a_run_always_carries_the_community_aggregate_for_yesterday():
-    deliveries = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED)
+    deliveries = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), WEATHER, SEED)
     community = [d for d in deliveries if d.key == COMMUNITY_KEY]
     assert len(community) == 1
     assert community[0].payload["interval_start"] == utc_text(
@@ -247,18 +379,18 @@ def test_a_run_always_carries_the_community_aggregate_for_yesterday():
 
 
 def test_a_run_never_carries_a_member_who_is_not_ours():
-    deliveries = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED)
+    deliveries = deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), WEATHER, SEED)
     assert SHOP.metering_point not in {d.key for d in deliveries}
     assert PLANT.metering_point not in {d.key for d in deliveries}
 
 
 def test_a_registry_with_none_of_our_customers_is_refused():
     with pytest.raises(SimulationError, match="none of our customers"):
-        deliveries_for(RUN_DAY, (SHOP, PLANT), wide_profiles(), SEED)
+        deliveries_for(RUN_DAY, (SHOP, PLANT), wide_profiles(), WEATHER, SEED)
 
 
 def test_every_message_a_run_produces_passes_the_validation_it_will_meet():
-    for delivery in deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), SEED):
+    for delivery in deliveries_for(RUN_DAY, REGISTRY, wide_profiles(), WEATHER, SEED):
         assert readings_of(decode(encode(delivery.payload)))
 
 
@@ -280,7 +412,9 @@ def test_the_delay_of_a_point_day_never_depends_on_when_it_is_asked():
 
 def test_a_correction_carries_a_higher_version_and_leaves_the_rest_untouched():
     point, day = _a_corrected_point_day()
-    intervals, consumption, allocated, _ = simulate_day(day, REGISTRY, wide_profiles(), SEED)
+    intervals, consumption, allocated, _ = simulate_day(
+        day, REGISTRY, wide_profiles(), WEATHER, SEED
+    )
     correction = _correction(HOUSE, day, intervals, consumption, allocated, SEED)
 
     assert correction is not None
@@ -291,7 +425,9 @@ def test_a_correction_carries_a_higher_version_and_leaves_the_rest_untouched():
 
 def test_a_correction_disagrees_with_the_first_delivery_it_replaces():
     point, day = _a_corrected_point_day()
-    intervals, consumption, allocated, _ = simulate_day(day, REGISTRY, wide_profiles(), SEED)
+    intervals, consumption, allocated, _ = simulate_day(
+        day, REGISTRY, wide_profiles(), WEATHER, SEED
+    )
     first = _first_delivery(HOUSE, day, intervals, consumption, allocated, SEED)
     correction = _correction(HOUSE, day, intervals, consumption, allocated, SEED)
 
@@ -322,7 +458,9 @@ def _a_corrected_point_day():
 
 def test_an_absent_interval_is_left_absent_rather_than_zeroed():
     day = date(2025, 3, 4)
-    intervals, consumption, allocated, _ = simulate_day(day, REGISTRY, wide_profiles(), SEED)
+    intervals, consumption, allocated, _ = simulate_day(
+        day, REGISTRY, wide_profiles(), WEATHER, SEED
+    )
     first = _first_delivery(HOUSE, day, intervals, consumption, allocated, SEED)
     for position, value in enumerate(first.payload["consumption"]):
         expected_absent = is_missing(HOUSE.metering_point, day, position, SEED)
