@@ -25,7 +25,8 @@
 <body>
   <header>
     <strong>MegaVolt pricing</strong>
-    {% if user %}<span class="muted">{{ user.email }} · {{ user.role }}</span>{% endif %}
+    {% if user %}<span class="muted">{{ user.email }} · {{ user.role }}
+      <button type="button" hx-post="/signout" hx-swap="none" style="margin-left:12px">Sign out</button></span>{% endif %}
   </header>
   <main>{% block content %}{% endblock %}</main>
 </body>

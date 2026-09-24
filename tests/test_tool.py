@@ -13,9 +13,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from megavolt_tool import main
-from megavolt_tool.auth import User, current_user
+from megavolt_tool import main, session
+from megavolt_tool.auth import SESSION_COOKIE, User, current_user
 from megavolt_tool.pricing import RateLimit, ToolError, engine, shown
+from megavolt_tool.session import Session, SessionError
 from megavolt_tool.store import Customer, Store, StoreError, valid_metering_point
 
 POINT = "AT09999902340TESTTOOLAAAAAAAAAAAA"
@@ -47,6 +48,28 @@ class FakeStore:
         return 0.05
 
 
+class FakeSupabase:
+    """Signs in one person, verifies one token, and keeps every audit row it is given."""
+
+    def __init__(self):
+        self.rows = []
+        self.signed_out = []
+
+    def sign_in(self, email, password):
+        if password != "right":
+            raise SessionError("sign-in failed")
+        return Session("token-of-" + email.split("@")[0], "refresh", 3600)
+
+    def sign_out(self, access_token):
+        self.signed_out.append(access_token)
+
+    def verify(self, access_token):
+        raise SessionError("session not recognised")
+
+    def record(self, access_token, row):
+        self.rows.append((access_token, row))
+
+
 class FakeEngine:
     """Answers like the private engine would, without any of its arithmetic."""
 
@@ -72,9 +95,15 @@ class FakeEngine:
 
 
 @pytest.fixture
-def client(monkeypatch):
+def record():
+    return FakeSupabase()
+
+
+@pytest.fixture
+def client(monkeypatch, record):
     monkeypatch.setattr(main, "store", FakeStore)
     monkeypatch.setattr(main, "rate_limit", RateLimit())
+    monkeypatch.setattr(session, "supabase", lambda: record)
     main.portfolio.reset()
     main.app.dependency_overrides[engine] = FakeEngine
     yield TestClient(main.app)
@@ -82,7 +111,9 @@ def client(monkeypatch):
 
 
 def signed_in_as(role):
-    main.app.dependency_overrides[current_user] = lambda: User(f"{role}@megavolt.test", role)
+    main.app.dependency_overrides[current_user] = lambda: User(
+        f"{role}@megavolt.test", role, f"token-of-{role}"
+    )
 
 
 def every_route(routes):
@@ -107,8 +138,60 @@ def test_every_route_but_sign_in_refuses_a_request_without_a_session(client):
                 continue
             path = route.path.replace("{metering_point}", POINT)
             # No htmx headers and an empty body: the gate must answer before anything else does.
-            response = client.request(method, path, data={})
-            assert response.status_code == 401, (method, path, response.status_code)
+            # A browser asking for a page is sent to sign in; anything else is a plain 401.
+            response = client.request(method, path, data={}, follow_redirects=False)
+            if method == "GET":
+                assert response.status_code == 303, (path, response.status_code)
+                assert response.headers["location"] == "/signin"
+            else:
+                assert response.status_code == 401, (method, path, response.status_code)
+
+
+def test_a_session_cookie_that_does_not_verify_is_refused(client):
+    client.cookies.set(SESSION_COOKIE, "stale")
+    assert client.post("/signout", headers=HTMX).status_code == 401
+
+
+# --- signing in and out ---------------------------------------------------------------------------
+
+FORM = {"Origin": "http://testserver"}
+
+
+def test_signing_in_sets_a_hardened_cookie_and_goes_to_the_customers(client):
+    answer = client.post(
+        "/signin",
+        data={"email": "a@megavolt.test", "password": "right"},
+        headers=FORM,
+        follow_redirects=False,
+    )
+    assert answer.status_code == 303 and answer.headers["location"] == "/"
+    cookie = answer.headers["set-cookie"]
+    assert cookie.startswith(f"{SESSION_COOKIE}=token-of-a;")
+    assert "HttpOnly" in cookie and "SameSite=strict" in cookie and "Max-Age=3600" in cookie
+
+
+def test_a_wrong_password_shows_the_form_again_with_one_line(client):
+    answer = client.post(
+        "/signin", data={"email": "a@megavolt.test", "password": "wrong"}, headers=FORM
+    )
+    assert answer.status_code == 401 and "sign-in failed" in answer.text
+    assert "set-cookie" not in answer.headers
+
+
+def test_signing_in_from_another_origin_is_refused(client):
+    elsewhere = {"Origin": "http://evil.example"}
+    answer = client.post(
+        "/signin", data={"email": "a@megavolt.test", "password": "right"}, headers=elsewhere
+    )
+    assert answer.status_code == 403
+
+
+def test_signing_out_ends_the_session_on_both_sides(client, record):
+    signed_in_as("sales")
+    answer = client.post("/signout", headers=HTMX)
+    assert answer.status_code == 200 and answer.headers["HX-Redirect"] == "/signin"
+    assert f'{SESSION_COOKIE}=""' in answer.headers["set-cookie"]
+    assert record.signed_out == ["token-of-sales"]
 
 
 def test_the_docs_pages_do_not_exist_even_for_an_admin(client):
@@ -135,6 +218,29 @@ def test_sales_sees_the_customers_and_prices_one(client):
     assert "12.35 c/kWh" in result.text and "391 €" in result.text and "591 €" in result.text
     assert "premium for unpredictability" in result.text
     assert "base" not in result.text
+
+
+def test_every_calculation_is_recorded_as_the_person_before_it_is_shown(client, record):
+    signed_in_as("sales")
+    client.post(f"/customers/{POINT}/offer", data={"contract": "both"}, headers=HTMX)
+    assert len(record.rows) == 1
+    token, row = record.rows[0]
+    assert token == "token-of-sales"
+    assert (row["email"], row["role"], row["event"]) == ("sales@megavolt.test", "sales", "priced")
+    assert (row["customer"], row["contract"]) == (POINT, "both")
+    assert row["detail"]["fixed"]["eur_kwh"] == 0.1235
+
+
+def test_when_the_record_cannot_be_written_there_is_no_offer(client, record):
+    signed_in_as("sales")
+
+    def refuse(access_token, row):
+        raise SessionError("the record could not be written")
+
+    record.record = refuse
+    answer = client.post(f"/customers/{POINT}/offer", data={"contract": "fixed"}, headers=HTMX)
+    assert answer.status_code == 503 and "could not be written" in answer.text
+    assert "c/kWh" not in answer.text
 
 
 def test_the_analyst_also_sees_the_components_and_the_portfolio(client):
