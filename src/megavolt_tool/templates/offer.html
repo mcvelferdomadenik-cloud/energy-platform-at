@@ -1,0 +1,24 @@
+{% if error %}
+<div class="card"><p class="error">{{ error }}</p></div>
+{% else %}
+{% if offer.fixed %}
+<div class="card">
+  <p class="muted">Fixed price, one year</p>
+  <p class="big">{{ "%.2f" | format(offer.fixed.eur_kwh * 100) }} c/kWh</p>
+  {% if user.role == "analyst" %}
+  <p class="muted">base {{ "%.1f" | format(offer.fixed.expected_eur_kwh * 100) }} · market {{ "%.1f" | format(offer.fixed.market_premium_eur_kwh * 100) }} · volume {{ "%.1f" | format(offer.fixed.volume_premium_eur_kwh * 100) }} · margin {{ "%.1f" | format(offer.fixed.margin_eur_kwh * 100) }} c/kWh</p>
+  {% endif %}
+</div>
+{% endif %}
+{% if offer.dynamic %}
+<div class="card">
+  <p class="muted">Market-linked tariff, one year</p>
+  <p class="big">about {{ "{:,}".format(offer.dynamic.expected_bill_eur) }} €</p>
+  <p>in a year of bad days up to <strong>{{ "{:,}".format(offer.dynamic.high_bill_eur) }} €</strong> · fee {{ "%.1f" | format(offer.dynamic.fee_eur_kwh * 100) }} c/kWh on top of the market price</p>
+</div>
+{% endif %}
+<div class="card">
+  <p class="muted">Why</p>
+  <ul>{% for line in offer.reasons %}<li>{{ line }}</li>{% endfor %}</ul>
+</div>
+{% endif %}

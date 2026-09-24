@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Customers</h1>
+<p class="muted">{{ customers | length }} registered. Pick one to price.</p>
+<table>
+  <thead><tr><th>Metering point</th><th>Segment</th><th>Profile</th><th>kWh / year</th></tr></thead>
+  <tbody>
+  {% for c in customers %}
+    <tr>
+      <td><a href="/customers/{{ c.metering_point }}">{{ c.metering_point }}</a></td>
+      <td>{{ c.segment }}</td>
+      <td>{{ c.profile_type }}</td>
+      <td>{{ "{:,.0f}".format(c.annual_kwh) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
