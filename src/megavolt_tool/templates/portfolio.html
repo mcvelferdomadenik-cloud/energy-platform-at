@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Portfolio</h1>
+{% if error %}
+<div class="card"><p class="error">{{ error }}</p></div>
+{% else %}
+<p class="muted">{{ portfolio.high_errors | length }} customers with a year of history, {{ portfolio.skipped }} without one yet.</p>
+{% endif %}
+{% endblock %}

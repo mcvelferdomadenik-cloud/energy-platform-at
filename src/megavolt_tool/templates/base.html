@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MegaVolt pricing</title>
+  <!-- htmx swaps 4xx and 5xx answers too: a refusal is one line on the page, not silence. -->
+  <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":".*","swap":true}],"allowEval":false}'>
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    :root { --ink: #1c1c1c; --muted: #6b6b6b; --line: #e3e3e3; --accent: #0b5cad; --bg: #fafaf7; }
+    body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+    header { display: flex; justify-content: space-between; padding: 12px 24px; border-bottom: 1px solid var(--line); background: #fff; }
+    main { max-width: 960px; margin: 0 auto; padding: 24px; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 600; font-size: 14px; }
+    a { color: var(--accent); }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 16px 20px; margin: 16px 0; }
+    .muted { color: var(--muted); }
+    .big { font-size: 28px; font-weight: 700; }
+    .error { color: #a12626; }
+    button { font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+    select { font: inherit; padding: 6px 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>MegaVolt pricing</strong>
+    {% if user %}<span class="muted">{{ user.email }} · {{ user.role }}
+      <button type="button" hx-post="/signout" hx-swap="none" style="margin-left:12px">Sign out</button></span>{% endif %}
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>

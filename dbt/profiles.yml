@@ -12,4 +12,6 @@ megavolt:
       dbname: "{{ env_var('POSTGRES_DB', 'megavolt') }}"
       schema: staging
       threads: 4
-      connect_timeout: 10
+      # Under a full build the laptop can take more than 10 s to accept a new connection; a
+      # timeout there fails a test with a database error and, with --fail-fast, the whole build.
+      connect_timeout: 60

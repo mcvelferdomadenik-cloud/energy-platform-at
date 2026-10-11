@@ -11,14 +11,24 @@
 -- replace within days. The flag only sees what the rule can see: at night, when the community covers
 -- nothing, a wrong consumption still follows it, so a true flag is not proof that a reading is right.
 
-{{ config(indexes=[
-    {'columns': ['metering_point', 'interval_start'], 'unique': true},
-    {'columns': ['interval_start']},
-]) }}
+-- Incremental: a run reworks the last 16 days and keeps the rest. 16 is the simulator's number
+-- (readings up to 3 days late, corrections up to 9 days after the day); real EDA deliveries can
+-- correct an allocation until the 16th of the next month, and anything that lands later than the
+-- window fails the singular test allocation_is_current and needs a --full-refresh.
+{{ config(
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key=['metering_point', 'interval_start'],
+    indexes=[
+        {'columns': ['metering_point', 'interval_start'], 'unique': true},
+        {'columns': ['interval_start']},
+    ]
+) }}
 
 with reading as (
 
     select * from {{ ref('stg_meter_reading') }}
+    where {{ recent_only('interval_start', 16) }}
 
 ),
 

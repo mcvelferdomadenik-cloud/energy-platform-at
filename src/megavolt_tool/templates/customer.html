@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<p><a href="/">← all customers</a></p>
+<h1>{{ customer.metering_point }}</h1>
+<p class="muted">{{ customer.segment }} · profile {{ customer.profile_type }} · {{ "{:,.0f}".format(customer.annual_kwh) }} kWh a year{% if customer.supplied_kwh %}, of which we supply about {{ "{:,.0f}".format(customer.supplied_kwh) }} after the community's share{% endif %}</p>
+<div class="card">
+  <form hx-post="/customers/{{ customer.metering_point }}/offer" hx-target="#offer" hx-swap="innerHTML">
+    <label>Contract
+      <select name="contract">
+        {% for c in contracts %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+      </select>
+    </label>
+    <button type="submit">Calculate</button>
+  </form>
+</div>
+<div id="offer"></div>
+{% endblock %}

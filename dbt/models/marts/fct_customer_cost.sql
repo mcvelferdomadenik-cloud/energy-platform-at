@@ -20,10 +20,18 @@
 -- (Electricity Balancing Guideline), articles 52 to 55. The day-ahead market time unit has been
 -- 15 minutes in the single day-ahead coupling since 1 October 2025.
 
-{{ config(indexes=[
-    {'columns': ['metering_point', 'interval_start'], 'unique': true},
-    {'columns': ['interval_start']},
-]) }}
+-- Incremental: ENTSO-E revises imbalance prices until they turn final, about 50 days after the
+-- month ends, so a delivery on the 1st turns final about 81 days later; a run reworks the last
+-- 100 days (room on top), the same span the ingest DAG re-fetches. Readings settle much sooner.
+{{ config(
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key=['metering_point', 'interval_start'],
+    indexes=[
+        {'columns': ['metering_point', 'interval_start'], 'unique': true},
+        {'columns': ['interval_start']},
+    ]
+) }}
 
 with purchase as (
 
@@ -39,6 +47,7 @@ with purchase as (
            bought_kwh
     from {{ ref('int_purchase') }}
     where forecast_method = 'standard_profile'
+      and {{ recent_only('interval_start', 100) }}
 
 ),
 

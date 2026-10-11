@@ -1,0 +1,40 @@
+# Lets Dependabot's small updates merge themselves once every required check on main is green.
+#
+# What merges on its own: patch and minor updates of Python packages (the `uv` ecosystem) and of
+# GitHub Actions. What stays a person's decision: major updates, and every Docker image: a new
+# TimescaleDB or Redpanda image has to be started against the real volume first (the 2.30.1 bump
+# shipped a second extension version next to the old one), and no check here does that.
+#
+# The merge is the ruleset's: `gh pr merge --auto` only asks GitHub to merge when the checks
+# `protect-main` requires have passed, so a red check still blocks. The token is the workflow's own
+# GITHUB_TOKEN; on a Dependabot pull request it is read-only unless the permissions below ask for
+# more, and it may do nothing else than merge this one pull request.
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Read what Dependabot is updating
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable auto-merge for patch and minor updates of Python packages and GitHub Actions
+        if: >-
+          contains(fromJSON('["uv", "pip", "github_actions"]'), steps.metadata.outputs.package-ecosystem)
+          && contains(fromJSON('["version-update:semver-patch", "version-update:semver-minor"]'), steps.metadata.outputs.update-type)
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

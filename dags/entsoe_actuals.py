@@ -21,7 +21,9 @@ from megavolt.warehouse import store_actual_load, store_imbalance_prices
 VIENNA = "Europe/Vienna"
 # Probed on 2026-09-19: 1 August was still intermediate after 49 days, 15 July final after 66.
 # The window has to reach past that, or a day would never be seen turning final.
-WINDOW_DAYS = 75
+# Prices turn final about 50 days after the month ends, so a day early in a month is final
+# about 80 days after delivery; 100 keeps re-fetching it until then.
+WINDOW_DAYS = 100
 # The token allows 400 requests a minute. Two tasks run side by side, so half a second each caps
 # them at 240 a minute together, whatever the network does.
 PAUSE_SECONDS = 0.5

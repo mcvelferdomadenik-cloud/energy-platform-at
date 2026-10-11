@@ -11,20 +11,47 @@
 --
 -- It uses no weather and no readings, so it is the same on a sunny and on an overcast day. That is
 -- the point of a baseline: the imbalance it causes is what a better forecast is measured against.
+--
+-- The horizon is the days we deliver on: every local day with a reading, and the day after it
+-- (tomorrow's purchase is made before tomorrow's readings exist). Prices reach back years further,
+-- but a forecast for a day we never delivered has nothing to be settled against, and 350 customers
+-- times two years of quarter hours is what made the purchase model unbuildable on a laptop.
 
+-- Incremental: the forecast for a day never changes once made; a run adds the days that gained
+-- their first reading since the last run (late readings open a day up to 3 days later; 16 is safe).
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key=['metering_point', 'interval_start'],
     indexes=[
         {'columns': ['metering_point', 'interval_start'], 'unique': true},
         {'columns': ['interval_start']},
     ]
 ) }}
 
-with quarter_hour as (
+with delivery_day as (
+
+    select distinct (interval_start at time zone 'Europe/Vienna')::date as local_day
+    from {{ ref('stg_meter_reading') }}
+    where {{ recent_only('interval_start', 16) }}
+
+),
+
+horizon as (
+
+    select local_day from delivery_day
+    union
+    select local_day + 1 from delivery_day
+
+),
+
+quarter_hour as (
 
     -- Only quarter hours with a day-ahead price: there is nothing to buy for the others.
-    select distinct interval_start
-    from {{ ref('int_day_ahead_price_quarter_hour') }}
+    select price.interval_start
+    from {{ ref('int_day_ahead_price_quarter_hour') }} as price
+    join horizon
+      on (price.interval_start at time zone 'Europe/Vienna')::date = horizon.local_day
 
 ),
 

@@ -30,7 +30,8 @@ models:
     staging:
       +schema: staging
       +materialized: view
-    # Steps between staging and the marts: still views over raw, still always current.
+    # Steps between staging and the marts. Views by default; the big ones (forecasts, purchase,
+    # preliminary readings, the price table) set their own materialization in the model file.
     intermediate:
       +schema: staging
       +materialized: view
