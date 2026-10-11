@@ -72,7 +72,9 @@ def audit(user: User, event: str, **fields: object) -> None:
         "contract": fields.pop("contract", None),
         "detail": fields,
     }
-    log.info(json.dumps(row))
+    # One log line by construction: json.dumps already escapes control characters, and the
+    # explicit replace makes that visible to a reader and to CodeQL (py/log-injection).
+    log.info(json.dumps(row).replace("\r", "\\r").replace("\n", "\\n"))
     session.supabase().record(user.token, row)
 
 
