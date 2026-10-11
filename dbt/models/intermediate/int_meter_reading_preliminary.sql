@@ -4,9 +4,16 @@
 --
 -- Same winner rule as stg_meter_reading, over fewer rows. Keep the two ORDER BY clauses identical.
 
+-- Incremental: a day's preliminary reading is fixed once 06:00 on the next morning has passed,
+-- so a run reworks only the last 3 days (a run before 06:00 and the clock-change weekend fit in).
 {{ config(
-    materialized='table',
-    indexes=[{'columns': ['metering_point', 'interval_start'], 'unique': true}]
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key=['metering_point', 'interval_start'],
+    indexes=[
+        {'columns': ['metering_point', 'interval_start'], 'unique': true},
+        {'columns': ['interval_start']},
+    ]
 ) }}
 
 with known_by_the_next_morning as (
@@ -16,6 +23,7 @@ with known_by_the_next_morning as (
     where delivered_at <= (
         ((interval_start at time zone 'Europe/Vienna')::date + 1)::timestamp + interval '6 hours'
     ) at time zone 'Europe/Vienna'
+      and {{ recent_only('interval_start', 3) }}
 
 ),
 

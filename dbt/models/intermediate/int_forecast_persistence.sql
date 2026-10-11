@@ -17,8 +17,12 @@
 -- weeks after a clock change the history is one solar hour off. Public holidays are not treated as
 -- Sundays. Where a customer has no history yet, the standard profile stands in.
 
+-- Incremental: a run forecasts the last 16 days again (the days whose preliminary history could
+-- still have grown) and reads history 32 days back, the 15-day window before the oldest of them.
 {{ config(
-    materialized='table',
+    materialized='incremental',
+    incremental_strategy='delete+insert',
+    unique_key=['metering_point', 'interval_start'],
     indexes=[
         {'columns': ['metering_point', 'interval_start'], 'unique': true},
         {'columns': ['interval_start']},
@@ -34,6 +38,7 @@ with target as (
            (interval_start at time zone 'Europe/Vienna')::date      as local_day,
            (interval_start at time zone 'Europe/Vienna')::time      as local_time
     from {{ ref('int_forecast_standard_profile') }}
+    where {{ recent_only('interval_start', 16) }}
 
 ),
 
@@ -44,6 +49,7 @@ history as (
            (interval_start at time zone 'Europe/Vienna')::date      as local_day,
            (interval_start at time zone 'Europe/Vienna')::time      as local_time
     from {{ ref('int_meter_reading_preliminary') }}
+    where {{ recent_only('interval_start', 32) }}
 
 ),
 

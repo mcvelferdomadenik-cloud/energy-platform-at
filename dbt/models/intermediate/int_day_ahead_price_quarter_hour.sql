@@ -6,6 +6,17 @@
 --
 -- If the same quarter hour is covered twice, by an hour and by a quarter hour of its own, the
 -- delivery we received last wins; among equals the finer one does.
+--
+-- A table, not a view: every forecast and purchase model joins on it, and as a view its
+-- DISTINCT ON left the planner guessing (it estimated 3.5 billion rows for the purchase).
+
+{{ config(
+    materialized='table',
+    indexes=[
+        {'columns': ['bidding_zone', 'interval_start'], 'unique': true},
+        {'columns': ['interval_start']},
+    ]
+) }}
 
 select distinct on (price.bidding_zone, slot)
        price.bidding_zone,
