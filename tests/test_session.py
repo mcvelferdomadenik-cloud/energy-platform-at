@@ -124,6 +124,9 @@ def test_a_project_with_published_keys_is_verified_against_them(monkeypatch):
             pass
 
         def get_signing_key_from_jwt(self, value):
+            if jwt.get_unverified_header(value).get("kid") != "k1":
+                raise jwt.exceptions.PyJWKClientError("no such key")
+
             class Key:
                 key = private.public_key()
 
@@ -137,6 +140,37 @@ def test_a_project_with_published_keys_is_verified_against_them(monkeypatch):
     assert client.verify(signed).role == "admin"
     with pytest.raises(SessionError, match="not recognised"):
         client.verify(token("admin"))  # the legacy HS256 token is not accepted by a keyed project
+    other_kid = jwt.encode(
+        jwt.decode(signed, options={"verify_signature": False}),
+        private,
+        algorithm="ES256",
+        headers={"kid": "k2"},
+    )
+    with pytest.raises(SessionError, match="not recognised"):
+        client.verify(other_kid)
+    with pytest.raises(SessionError, match="not recognised"):
+        stand_in(lambda r: httpx.Response(500)).verify(signed)  # ES256 against a secret project
+
+
+def test_a_token_without_an_expiry_or_a_subject_or_with_no_algorithm_is_refused():
+    client = stand_in(lambda r: httpx.Response(500))
+    no_exp = jwt.encode(
+        {
+            "aud": "authenticated",
+            "iss": f"{URL}/auth/v1",
+            "sub": "u",
+            "app_metadata": {"role": "sales"},
+        },
+        SECRET,
+        algorithm="HS256",
+    )
+    no_sub = token(sub=None)
+    unsigned = jwt.encode(
+        jwt.decode(token(), options={"verify_signature": False}), None, algorithm="none"
+    )
+    for bad in (no_exp, no_sub, unsigned):
+        with pytest.raises(SessionError, match="not recognised"):
+            client.verify(bad)
 
 
 # --- the record -----------------------------------------------------------------------------------
@@ -165,6 +199,15 @@ def test_a_record_that_cannot_be_written_is_an_error_not_a_shrug():
         stand_in(lambda r: (_ for _ in ()).throw(httpx.ConnectError("x"))).record("tok", {})
 
 
+def test_an_answer_that_is_not_a_session_is_a_refusal_not_a_trace():
+    portal = stand_in(lambda r: httpx.Response(200, text="<html>captive portal</html>"))
+    with pytest.raises(SessionError, match="sign-in failed"):
+        portal.sign_in("a", "b")
+    partial = stand_in(lambda r: httpx.Response(200, json={"access_token": "t"}))
+    with pytest.raises(SessionError, match="sign-in failed"):
+        partial.sign_in("a", "b")
+
+
 def test_settings_come_from_the_environment_only(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
@@ -174,3 +217,6 @@ def test_settings_come_from_the_environment_only(monkeypatch):
     monkeypatch.setenv("SUPABASE_ANON_KEY", "anon")
     monkeypatch.setenv("SUPABASE_JWT_SECRET", "")
     assert sessions.settings() == Settings(URL, "anon", None)
+    monkeypatch.setenv("SUPABASE_URL", "http://test-project.supabase.test")
+    with pytest.raises(SessionError, match="https://"):
+        sessions.settings()

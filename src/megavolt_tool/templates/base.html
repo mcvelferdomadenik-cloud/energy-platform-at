@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MegaVolt pricing</title>
+  <!-- htmx swaps 4xx and 5xx answers too: a refusal is one line on the page, not silence. -->
+  <meta name="htmx-config" content='{"responseHandling":[{"code":"204","swap":false},{"code":".*","swap":true}],"allowEval":false}'>
   <script src="/static/htmx.min.js"></script>
   <style>
     :root { --ink: #1c1c1c; --muted: #6b6b6b; --line: #e3e3e3; --accent: #0b5cad; --bg: #fafaf7; }

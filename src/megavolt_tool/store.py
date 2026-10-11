@@ -38,6 +38,12 @@ class Customer:
     segment: str
     profile_type: str
     annual_kwh: float
+    # What we supply in a year: the registered consumption minus the community's share, read from
+    # the settled history. This, not the whole consumption, is the volume an offer is for. Zero
+    # until a customer has settled quarter hours; the list page does not compute it. It is the
+    # same average the engine checks a volume against, so from the tool that check cannot fail;
+    # it still guards a volume typed or uploaded by hand.
+    supplied_kwh: float = 0.0
 
 
 _CUSTOMERS = """
@@ -47,9 +53,12 @@ ORDER BY segment, profile_type, metering_point
 """
 
 _CUSTOMER = """
-SELECT metering_point, segment, profile_type, annual_kwh
-FROM marts.dim_metering_point
-WHERE metering_point = %s
+SELECT d.metering_point, d.segment, d.profile_type, d.annual_kwh,
+       coalesce((SELECT avg(actual_kwh) * 96 * 365
+                 FROM marts.fct_customer_cost
+                 WHERE metering_point = d.metering_point AND is_settled), 0) AS supplied_kwh
+FROM marts.dim_metering_point AS d
+WHERE d.metering_point = %s
 """
 
 _SETTLED = """

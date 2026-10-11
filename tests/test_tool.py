@@ -6,6 +6,7 @@ computes is its own tests' business.
 
 import hashlib
 import math
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,7 +31,7 @@ class FakeStore:
 
     def customers(self):
         return [
-            Customer(POINT, "household", "H0", 3500.0),
+            Customer(POINT, "household", "H0", 3500.0, supplied_kwh=2400.0),
             Customer(POINT[:-1] + "B", "business", "G0", 6000.0),
         ]
 
@@ -54,6 +55,7 @@ class FakeSupabase:
     def __init__(self):
         self.rows = []
         self.signed_out = []
+        self.verified = []
 
     def sign_in(self, email, password):
         if password != "right":
@@ -64,6 +66,9 @@ class FakeSupabase:
         self.signed_out.append(access_token)
 
     def verify(self, access_token):
+        self.verified.append(access_token)
+        if access_token.startswith("token-of-"):
+            return SimpleNamespace(user_id="u", email="a@megavolt.test", role="sales")
         raise SessionError("session not recognised")
 
     def record(self, access_token, row):
@@ -73,7 +78,10 @@ class FakeSupabase:
 class FakeEngine:
     """Answers like the private engine would, without any of its arithmetic."""
 
+    asked_kwh = None
+
     def price(self, prices, settled, annual_kwh, spread, contract, others):
+        FakeEngine.asked_kwh = annual_kwh
         fixed = SimpleNamespace(
             eur_kwh=0.123456,
             expected_eur_kwh=0.1,
@@ -103,6 +111,7 @@ def record():
 def client(monkeypatch, record):
     monkeypatch.setattr(main, "store", FakeStore)
     monkeypatch.setattr(main, "rate_limit", RateLimit())
+    monkeypatch.setattr(main, "sign_in_limit", RateLimit(per_hour=main.SIGN_INS_PER_HOUR))
     monkeypatch.setattr(session, "supabase", lambda: record)
     main.portfolio.reset()
     main.app.dependency_overrides[engine] = FakeEngine
@@ -147,9 +156,15 @@ def test_every_route_but_sign_in_refuses_a_request_without_a_session(client):
                 assert response.status_code == 401, (method, path, response.status_code)
 
 
-def test_a_session_cookie_that_does_not_verify_is_refused(client):
+def test_a_session_cookie_that_does_not_verify_is_refused(client, record):
     client.cookies.set(SESSION_COOKIE, "stale")
-    assert client.post("/signout", headers=HTMX).status_code == 401
+    answer = client.post("/signout", headers=HTMX)
+    assert answer.status_code == 401 and answer.headers["HX-Redirect"] == "/signin"
+    assert record.verified == ["stale"]
+
+
+def test_a_request_for_another_host_is_refused_before_anything_else(client):
+    assert client.get("/signin", headers={"Host": "attacker.example"}).status_code == 400
 
 
 # --- signing in and out ---------------------------------------------------------------------------
@@ -178,19 +193,52 @@ def test_a_wrong_password_shows_the_form_again_with_one_line(client):
     assert "set-cookie" not in answer.headers
 
 
-def test_signing_in_from_another_origin_is_refused(client):
-    elsewhere = {"Origin": "http://evil.example"}
+def test_signing_in_from_another_origin_or_from_nowhere_is_refused(client):
+    for headers in ({"Origin": "http://evil.example"}, {}):
+        answer = client.post(
+            "/signin", data={"email": "a@megavolt.test", "password": "right"}, headers=headers
+        )
+        assert answer.status_code == 403, headers
+
+
+def test_an_account_without_a_role_cannot_sign_in(client, record):
+    def no_role(token):
+        raise SessionError("this account has no role in the tool")
+
+    record.verify = no_role
     answer = client.post(
-        "/signin", data={"email": "a@megavolt.test", "password": "right"}, headers=elsewhere
+        "/signin", data={"email": "a@megavolt.test", "password": "right"}, headers=FORM
     )
-    assert answer.status_code == 403
+    assert answer.status_code == 401 and "no role" in answer.text
+    assert "set-cookie" not in answer.headers
+    # The Supabase session that sign-in opened is closed again, not left alive for an hour.
+    assert record.signed_out == ["token-of-a"]
+
+
+def test_the_eleventh_sign_in_attempt_in_an_hour_is_refused(client):
+    for _ in range(10):
+        client.post("/signin", data={"email": "x@megavolt.test", "password": "wrong"}, headers=FORM)
+    answer = client.post(
+        "/signin", data={"email": "X@megavolt.test ", "password": "right"}, headers=FORM
+    )
+    assert answer.status_code == 401 and "too many" in answer.text
+
+
+def test_a_form_that_does_not_fit_is_not_echoed_back(client):
+    answer = client.post("/signin", data={"email": "a@megavolt.test"}, headers=FORM)
+    assert answer.status_code == 422 and "not filled in" in answer.text
+    long = client.post(
+        "/signin", data={"email": "a@megavolt.test", "password": "p" * 2000}, headers=FORM
+    )
+    assert long.status_code == 422 and "ppp" not in long.text
 
 
 def test_signing_out_ends_the_session_on_both_sides(client, record):
     signed_in_as("sales")
     answer = client.post("/signout", headers=HTMX)
     assert answer.status_code == 200 and answer.headers["HX-Redirect"] == "/signin"
-    assert f'{SESSION_COOKIE}=""' in answer.headers["set-cookie"]
+    cookie = answer.headers["set-cookie"]
+    assert f'{SESSION_COOKIE}=""' in cookie and "HttpOnly" in cookie and "SameSite=strict" in cookie
     assert record.signed_out == ["token-of-sales"]
 
 
@@ -213,8 +261,11 @@ def test_sales_sees_the_customers_and_prices_one(client):
     assert client.get("/").status_code == 200
     page = client.get(f"/customers/{POINT}")
     assert page.status_code == 200 and POINT in page.text
+    assert "we supply about 2,400" in page.text
     result = client.post(f"/customers/{POINT}/offer", data={"contract": "both"}, headers=HTMX)
     assert result.status_code == 200
+    # The offer is for what we supply after the community's share, not the whole consumption.
+    assert FakeEngine.asked_kwh == 2400.0
     assert "12.35 c/kWh" in result.text and "391 €" in result.text and "591 €" in result.text
     assert "premium for unpredictability" in result.text
     assert "base" not in result.text
@@ -229,6 +280,21 @@ def test_every_calculation_is_recorded_as_the_person_before_it_is_shown(client, 
     assert (row["email"], row["role"], row["event"]) == ("sales@megavolt.test", "sales", "priced")
     assert (row["customer"], row["contract"]) == (POINT, "both")
     assert row["detail"]["fixed"]["eur_kwh"] == 0.1235
+
+
+def test_a_refusal_and_a_portfolio_view_are_recorded_too(client, record):
+    signed_in_as("analyst")
+
+    class Refusing(FakeEngine):
+        def price(self, *args):
+            raise ToolError("cannot price this customer: the consumption does not cover a year")
+
+    main.app.dependency_overrides[engine] = Refusing
+    client.post(f"/customers/{POINT}/offer", data={"contract": "fixed"}, headers=HTMX)
+    client.get("/portfolio")
+    events = [row["event"] for _, row in record.rows]
+    assert events == ["refused", "portfolio"]
+    assert record.rows[0][1]["detail"]["reason"].startswith("cannot price")
 
 
 def test_when_the_record_cannot_be_written_there_is_no_offer(client, record):
@@ -329,6 +395,9 @@ def test_an_engine_that_refuses_is_shown_as_a_plain_message(client):
 def test_a_missing_engine_and_a_missing_warehouse_are_never_a_500(client, monkeypatch):
     signed_in_as("analyst")
     main.app.dependency_overrides.pop(engine)  # the real wrapper, without the private package
+    # Whether or not the private package happens to be installed here, the tool must behave as
+    # if it were not: the public test suite never depends on it.
+    monkeypatch.setitem(sys.modules, "megavolt_pricing", None)
     result = client.post(f"/customers/{POINT}/offer", data={"contract": "fixed"}, headers=HTMX)
     assert result.status_code == 422 and "not installed" in result.text
     assert client.get("/portfolio").status_code == 422

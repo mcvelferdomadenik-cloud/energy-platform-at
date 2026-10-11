@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from megavolt_tool import session
 from megavolt_tool.auth import (
@@ -37,12 +39,20 @@ CONTRACTS = ("fixed", "dynamic", "both")
 # The tool speaks plain http on loopback only, so the cookie cannot be marked Secure; if it ever
 # gets a hostname and TLS, this becomes True.
 COOKIE_SECURE = False
+# The tool answers to these names only, so a page elsewhere cannot rebind them to it.
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "testserver"]
+# Sign-in attempts per account per hour: an assumption, generous for a person, tight for a script
+# guessing one password. Keyed on the account, not the address, so a script rotating addresses
+# against one account is still capped; on a loopback tool every address is the same anyway.
+SIGN_INS_PER_HOUR = 10
 log = logging.getLogger("megavolt_tool")
 
 templates = Jinja2Templates(directory=HERE / "templates")
 app = FastAPI(title="MegaVolt pricing tool", docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 rate_limit = RateLimit()
+sign_in_limit = RateLimit(per_hour=SIGN_INS_PER_HOUR)
 portfolio = Portfolio()
 
 
@@ -76,11 +86,25 @@ def _refused(request: Request, exc: Exception) -> HTMLResponse:
 
 @app.exception_handler(HTTPException)
 def _http_error(request: Request, exc: HTTPException) -> HTMLResponse | RedirectResponse:
-    """A browser without a session is sent to the sign-in page; everything else stays as it is."""
-    if exc.status_code == status.HTTP_401_UNAUTHORIZED and request.method == "GET":
-        return RedirectResponse("/signin", status_code=status.HTTP_303_SEE_OTHER)
+    """A browser without a session is sent to the sign-in page; everything else is one line."""
+    if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+        if request.method == "GET":
+            return RedirectResponse("/signin", status_code=status.HTTP_303_SEE_OTHER)
+        if request.headers.get("HX-Request") == "true":
+            return HTMLResponse("", status_code=exc.status_code, headers={"HX-Redirect": "/signin"})
     return HTMLResponse(
-        f'<p class="error">{html.escape(str(exc.detail))}</p>', status_code=exc.status_code
+        f'<p class="error">{html.escape(str(exc.detail))}</p>',
+        status_code=exc.status_code,
+        headers=exc.headers,
+    )
+
+
+@app.exception_handler(RequestValidationError)
+def _bad_form(request: Request, exc: RequestValidationError) -> HTMLResponse:
+    """A form that does not fit gets one line back, never its own contents echoed."""
+    return HTMLResponse(
+        '<p class="error">the form was not filled in as expected</p>',
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
 
 
@@ -98,8 +122,16 @@ def sign_in(
 ):
     """Exchange the form for a session cookie, or show the form again with one line."""
     try:
+        sign_in_limit.check(email.strip().lower())
         opened = session.supabase().sign_in(email, password)
-    except session.SessionError as exc:
+        # An account without a role would sign in and then bounce between pages in silence; its
+        # Supabase session is closed again so it does not live on for an hour unused.
+        try:
+            session.supabase().verify(opened.access_token)
+        except session.SessionError:
+            session.supabase().sign_out(opened.access_token)
+            raise
+    except (session.SessionError, ToolError) as exc:
         return templates.TemplateResponse(
             request, "signin.html", {"error": str(exc)}, status_code=401
         )
@@ -176,7 +208,7 @@ def offer(
             calculator.price(
                 store().prices(),
                 store().settled(point),
-                found.annual_kwh,
+                found.supplied_kwh,
                 store().spread_eur_kwh(),
                 contract,
                 portfolio.current(store(), calculator),

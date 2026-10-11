@@ -3,7 +3,9 @@
 The tool never holds a key that bypasses row-level security. It signs people in with the public
 `anon` key, verifies their access token itself against the project's signing keys, and writes each
 audit row with the person's own token, under a policy that allows inserting and nothing else. So
-even a broken tool cannot read what it should not or rewrite the record.
+even a broken tool cannot read what it should not or rewrite the record. A session lives as long
+as the access token (an hour by default) and is not refreshed: it ends, and the person signs in
+again.
 """
 
 from __future__ import annotations
@@ -23,6 +25,8 @@ URL_ENV, ANON_ENV, SECRET_ENV = "SUPABASE_URL", "SUPABASE_ANON_KEY", "SUPABASE_J
 AUDIENCE = "authenticated"
 TIMEOUT_SECONDS = 10.0
 AUDIT_TABLE = "audit_log"
+# A token without an expiry would never expire; one without a subject names nobody.
+REQUIRED_CLAIMS = ["exp", "sub"]
 
 
 class SessionError(RuntimeError):
@@ -63,6 +67,8 @@ def settings() -> Settings:
     anon = os.environ.get(ANON_ENV, "").strip()
     if not url or not anon:
         raise SessionError(f"{URL_ENV} and {ANON_ENV} must be set; see .env.example")
+    if not url.startswith("https://"):
+        raise SessionError(f"{URL_ENV} must start with https://")
     return Settings(url, anon, os.environ.get(SECRET_ENV, "").strip() or None)
 
 
@@ -91,8 +97,13 @@ class Supabase:
             raise SessionError("the sign-in service is not reachable") from exc
         if answer.status_code != 200:
             raise SessionError("sign-in failed")
-        body = answer.json()
-        return Session(body["access_token"], body["refresh_token"], int(body["expires_in"]))
+        try:
+            body = answer.json()
+            return Session(
+                str(body["access_token"]), str(body["refresh_token"]), int(body["expires_in"])
+            )
+        except (ValueError, KeyError, TypeError) as exc:
+            raise SessionError("sign-in failed") from exc
 
     def sign_out(self, access_token: str) -> None:
         """End the session server-side; a token that is already dead is not an error."""
@@ -104,6 +115,7 @@ class Supabase:
     def verify(self, access_token: str) -> Claims:
         """Check the token's signature, audience, issuer and expiry, and read the role."""
         issuer = f"{self._config.url}/auth/v1"
+        options = {"require": REQUIRED_CLAIMS}
         try:
             if self._config.jwt_secret:
                 payload = jwt.decode(
@@ -112,6 +124,7 @@ class Supabase:
                     algorithms=["HS256"],
                     audience=AUDIENCE,
                     issuer=issuer,
+                    options=options,
                 )
             else:
                 key = self._keys.get_signing_key_from_jwt(access_token).key
@@ -121,6 +134,7 @@ class Supabase:
                     algorithms=["ES256", "RS256"],
                     audience=AUDIENCE,
                     issuer=issuer,
+                    options=options,
                 )
         except jwt.PyJWTError as exc:
             raise SessionError("session not recognised") from exc
