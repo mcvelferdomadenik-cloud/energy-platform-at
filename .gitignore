@@ -14,6 +14,8 @@ CLAUDE.md
 PROJECT_PLAN.md
 THREAT_MODEL.md
 decisions.md
+MIGRATION.md
+RUNBOOK.md
 
 # --- Real / synthetic customer data: PII by design, stays local ---
 data/
