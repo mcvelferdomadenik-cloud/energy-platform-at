@@ -36,6 +36,24 @@ services:
     <<: *warehouse-image
     container_name: megavolt-warehouse
     restart: unless-stopped
+    # Parallel hash joins over the big marts live in /dev/shm (work_mem x workers x threads);
+    # Docker's default 64 MB aborts them.
+    shm_size: 4g
+    # Memory follows the machine: the defaults here fit a laptop, the server's values live in
+    # .env (see .env.example). work_mem is per sort or join, so it multiplies by threads and
+    # parallel workers; shared_buffers is allocated at start and fails the start when too big.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${WAREHOUSE_SHARED_BUFFERS:-1GB}
+      - -c
+      - effective_cache_size=${WAREHOUSE_EFFECTIVE_CACHE_SIZE:-4GB}
+      - -c
+      - work_mem=${WAREHOUSE_WORK_MEM:-32MB}
+      - -c
+      - maintenance_work_mem=${WAREHOUSE_MAINTENANCE_WORK_MEM:-256MB}
+      - -c
+      - max_parallel_workers_per_gather=${WAREHOUSE_PARALLEL_WORKERS:-2}
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
       POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
