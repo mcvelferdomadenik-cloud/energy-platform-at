@@ -587,15 +587,39 @@ def _profiles_for(run_day: date, members: tuple[Member, ...]):
     return profiles
 
 
-def _weather_for(run_day: date) -> dict[str, dict[datetime, float]]:
-    """The weather measured at the plant on every day a run can reach back into."""
+def _load_weather(
+    start: datetime, end: datetime, parameters: tuple[str, ...]
+) -> dict[str, dict[datetime, float]]:
+    """The plant's weather between two moments, as the warehouse froze it."""
     from megavolt.community import LATITUDE, LONGITUDE
     from megavolt.geosphere import DATASET
     from megavolt.warehouse import load_weather
 
+    return load_weather(start, end, DATASET, LATITUDE, LONGITUDE, parameters)
+
+
+def _weather_for(run_day: date) -> dict[str, dict[datetime, float]]:
+    """The weather measured at the plant on every day a run can reach back into."""
     earliest = day_intervals(run_day - timedelta(days=MAX_LOOKBACK_DAYS + HEATING_MEMORY_DAYS))[0]
     latest = day_intervals(run_day)[0] + HOUR
-    return load_weather(earliest, latest, DATASET, LATITUDE, LONGITUDE, (RADIATION, TEMPERATURE))
+    return _load_weather(earliest, latest, (RADIATION, TEMPERATURE))
+
+
+def weather_ready(delivery_date: date) -> bool:
+    """Whether the warehouse has frozen the weather of the day the delivery covers.
+
+    Generation is simulated from the radiation of the day before the delivery day. The
+    warehouse answers with a day's values only once that day is frozen, and a frozen day never
+    changes again, so one returned hour is the whole answer: waiting longer cannot add hours,
+    and an hour without a value is the simulator's business (it falls back per hour). The
+    warehouse counts the hour ending at midnight to the day before, hence the open start. Both
+    parameters count: a day whose radiation is missing throughout is still a frozen day.
+    """
+    covered = delivery_date - timedelta(days=1)
+    start = day_intervals(covered)[0]
+    end = day_intervals(delivery_date)[0]
+    weather = _load_weather(start, end, (RADIATION, TEMPERATURE))
+    return any(start < moment <= end for moments in weather.values() for moment in moments)
 
 
 def _delivery_day(delivery_date: date) -> tuple[str, tuple[Member, ...], tuple[Delivery, ...]]:

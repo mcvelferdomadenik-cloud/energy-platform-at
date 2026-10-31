@@ -49,6 +49,7 @@ def finished(stored: int, failed: list[str]) -> int:
     dag_id="entsoe_actuals",
     schedule="0 6 * * *",
     start_date=pendulum.datetime(2026, 9, 1, tz=VIENNA),
+    # Every run fetches a window of days, so an outage up to `window_days` needs no run of its own.
     catchup=False,
     max_active_runs=1,
     default_args={

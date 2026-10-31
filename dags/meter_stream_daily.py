@@ -3,25 +3,37 @@
 The grid operator's overnight delivery lands at 03:30 Vienna time; this runs at 05:00, after it.
 It calls the same function as `python -m megavolt.simulate`, so a scheduled run and a hand-run day
 produce identical messages. The consumer service picks them up from the topic.
+
+Missed mornings are caught up in order (`catchup=True`): a day the server slept through is
+delivered the moment it is back; a day already delivered produces the same messages again and the
+warehouse stores nothing new. Each delivery first waits until the warehouse has frozen the weather
+of the day it covers: generation is simulated from measured radiation, so a day cannot be
+delivered before its weather is in, and waiting beats failing after two quick retries.
 """
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pendulum
 from airflow.sdk import dag, task
 
-from megavolt.simulate import deliver
+from megavolt.simulate import deliver, weather_ready
 
 VIENNA = "Europe/Vienna"
+# A timed-out sensor is not retried, and a day it gives up on is delivered only by hand (clear the
+# run), so the sensor outlasts any weather outage we would not notice: a rescheduled sensor holds
+# no worker, and the days queue up in order meanwhile (`max_active_runs=1`), which is right, since
+# none of them could be simulated without its weather anyway.
+WEATHER_POKE = timedelta(minutes=10)
+WEATHER_PATIENCE = timedelta(days=7)
 
 
 @dag(
     dag_id="meter_stream_daily",
     schedule="0 5 * * *",
     start_date=pendulum.datetime(2026, 9, 1, tz=VIENNA),
-    catchup=False,
+    catchup=True,
     max_active_runs=1,
     default_args={"retries": 2, "retry_delay": timedelta(minutes=10)},
     tags=["meter_stream", "simulator"],
@@ -29,17 +41,33 @@ VIENNA = "Europe/Vienna"
 def meter_stream_daily():
     """A bare cron string in Airflow 3 triggers at the cron time, so logical_date is the run day."""
 
+    def delivery_date_of(context) -> date:
+        # A manual run has no logical_date in Airflow 3, only run_after, which is a plain datetime.
+        moment = pendulum.instance(context.get("logical_date") or context["dag_run"].run_after)
+        return moment.in_timezone(VIENNA).date()
+
+    # A poke that raises (the warehouse still starting after a reboot) is retried, unlike a
+    # timeout; two hours of that is more than a container start takes.
+    @task.sensor(
+        poke_interval=WEATHER_POKE,
+        timeout=WEATHER_PATIENCE,
+        mode="reschedule",
+        retries=12,
+        retry_delay=timedelta(minutes=10),
+    )
+    def wait_for_weather(**context) -> bool:
+        """Hold the delivery until the weather DAG has stored the day the readings cover."""
+        return weather_ready(delivery_date_of(context))
+
     @task
     def produce_delivery_day(**context) -> int:
         """Register our metering points and produce everything that arrives on the run day."""
-        # A manual run has no logical_date in Airflow 3, only run_after, which is a plain datetime.
-        moment = pendulum.instance(context.get("logical_date") or context["dag_run"].run_after)
-        delivery_date = moment.in_timezone(VIENNA).date()
+        delivery_date = delivery_date_of(context)
         registered, produced = deliver(delivery_date)
         print(f"{delivery_date}: registered {registered} new rows, produced {produced} messages")
         return produced
 
-    produce_delivery_day()
+    wait_for_weather() >> produce_delivery_day()
 
 
 meter_stream_daily()
