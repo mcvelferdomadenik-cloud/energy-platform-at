@@ -7,6 +7,9 @@ Source: GeoSphere Austria, INCA analysis, CC BY 4.0. The whole window is one req
 is this same DAG with a larger `window_days`: a year still costs one of the 240 requests the data
 hub allows an hour. The analysis can be reprocessed, so the last days are fetched again every run
 and the warehouse keeps only what changed.
+
+Missed mornings are caught up in order (`catchup=True`), one request each, so every day's
+weather is stored and frozen before the meter stream delivers it, without a hand-set window.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ WINDOW_DAYS = 10
     dag_id="geosphere_weather",
     schedule="30 4 * * *",
     start_date=pendulum.datetime(2026, 9, 1, tz="Europe/Vienna"),
-    catchup=False,
+    catchup=True,
     max_active_runs=1,
     default_args={
         "retries": 3,

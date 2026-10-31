@@ -32,6 +32,9 @@ HOUR = datetime(2001, 6, 21, 10, 0, tzinfo=UTC)
 QUARTERS = [HOUR + timedelta(minutes=15 * step) for step in range(4)]
 SHAPE = [0.04, 0.06, 0.08, 0.10]
 SENT = datetime(2001, 6, 23, 2, 30, tzinfo=UTC)
+# The forecast covers only the local days we delivered on and the day after each. One reading on the
+# eve, at a time of day no test asks about, makes the test day a day we buy for.
+EVE = datetime(2001, 6, 20, 3, 0, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -55,6 +58,12 @@ def cursor():
                 " payload_hash) VALUES (%s, %s, 2001, %s, %s)",
                 [("H0", q, value, f"t-h0-{q}") for q, value in zip(QUARTERS, SHAPE, strict=True)]
                 + [("E1", q, 0.0, f"t-e1-{q}") for q in QUARTERS],
+            )
+            cur.execute(
+                "INSERT INTO raw.meter_reading (metering_point, interval_start, consumption_kwh,"
+                " allocated_kwh, meter_id, version, delivered_at, payload_hash)"
+                " VALUES (%s, %s, 0.01, 0, %s, 1, %s, 't-eve')",
+                (FIRST_CUSTOMER, EVE, f"MV-{FIRST_CUSTOMER[-1]}", EVE + timedelta(days=1)),
             )
             yield cur
     finally:

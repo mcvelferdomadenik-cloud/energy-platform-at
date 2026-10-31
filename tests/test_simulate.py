@@ -491,3 +491,72 @@ def test_registrations_only_ever_cover_our_own_points():
     grouped = registrations(REGISTRY, 2025, SEED)
     registered = {member.metering_point for group in grouped.values() for member in group}
     assert registered == {HOUSE.metering_point}
+
+
+def _fake_weather(moments):
+    """A load_weather that answers with radiation at the given UTC moments, whatever is asked."""
+
+    def load(start, end, dataset, latitude, longitude, parameters):
+        return {"GL": {moment: 100.0 for moment in moments}, "T2M": {}}
+
+    return load
+
+
+MIDNIGHT_14 = datetime(2026, 7, 13, 22, tzinfo=UTC)
+MIDNIGHT_15 = datetime(2026, 7, 14, 22, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("moments", "ready"),
+    [
+        ([MIDNIGHT_14 + timedelta(hours=h) for h in range(1, 25)], True),
+        (
+            [
+                MIDNIGHT_14 + timedelta(hours=h)
+                for h in (1, 2, 5, 6, 7, 9, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24)
+            ],
+            True,
+        ),
+        ([MIDNIGHT_15], True),
+        ([MIDNIGHT_14], False),
+        ([], False),
+    ],
+    ids=[
+        "complete",
+        "frozen with holes",
+        "only the midnight hour",
+        "only the day before",
+        "nothing",
+    ],
+)
+def test_weather_ready_means_the_covered_day_is_frozen(monkeypatch, moments, ready):
+    from megavolt import simulate, warehouse
+
+    monkeypatch.setattr(warehouse, "load_weather", _fake_weather(moments))
+    assert simulate.weather_ready(date(2026, 7, 15)) is ready
+
+
+def test_weather_ready_accepts_a_day_with_temperature_but_no_radiation(monkeypatch):
+    from megavolt import simulate, warehouse
+
+    def load(*args):
+        return {"GL": {}, "T2M": {MIDNIGHT_14 + timedelta(hours=12): 21.0}}
+
+    monkeypatch.setattr(warehouse, "load_weather", load)
+    assert simulate.weather_ready(date(2026, 7, 15)) is True
+
+
+def test_weather_ready_asks_for_the_day_before_the_delivery(monkeypatch):
+    from megavolt import simulate, warehouse
+
+    asked = {}
+
+    def load(start, end, dataset, latitude, longitude, parameters):
+        asked.update(start=start, end=end, parameters=parameters)
+        return {"GL": {}, "T2M": {}}
+
+    monkeypatch.setattr(warehouse, "load_weather", load)
+    simulate.weather_ready(date(2026, 7, 15))
+    assert asked["start"] == MIDNIGHT_14
+    assert asked["end"] == MIDNIGHT_15
+    assert asked["parameters"] == ("GL", "T2M")

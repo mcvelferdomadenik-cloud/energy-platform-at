@@ -33,6 +33,8 @@ KILL_AFTER = "60"
     dag_id="dbt_build",
     schedule="30 5 * * *",
     start_date=pendulum.datetime(2026, 9, 1, tz=VIENNA),
+    # One build picks up everything that arrived meanwhile (catch-up deliveries arrive in date
+    # order, so they fall inside the incremental windows), so a missed morning needs no run.
     catchup=False,
     max_active_runs=1,
     default_args={

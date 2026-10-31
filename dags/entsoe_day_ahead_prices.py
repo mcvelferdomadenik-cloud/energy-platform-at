@@ -1,4 +1,8 @@
-"""Store the Austrian day-ahead prices for the next delivery day, once a day."""
+"""Store the Austrian day-ahead prices for the next delivery day, once a day.
+
+Missed afternoons are caught up in order (`catchup=True`): the auction results stay available, a
+day the server slept through is fetched when it is back, and a day already stored stores nothing.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ VIENNA = "Europe/Vienna"
     dag_id="entsoe_day_ahead_prices",
     schedule="0 14 * * *",
     start_date=pendulum.datetime(2026, 9, 1, tz=VIENNA),
-    catchup=False,
+    catchup=True,
     max_active_runs=1,
     default_args={"retries": 3, "retry_delay": timedelta(minutes=15)},
     tags=["entsoe", "prices"],
