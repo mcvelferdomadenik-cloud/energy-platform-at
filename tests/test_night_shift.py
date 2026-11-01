@@ -40,8 +40,8 @@ class FakeAirflow:
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/auth/token":
-            return httpx.Response(201, json={"access_token": "secret-token"})
-        assert request.headers["Authorization"] == "Bearer secret-token"
+            return httpx.Response(201, json={"access_token": "fake-tok"})
+        assert request.headers["Authorization"] == "Bearer fake-tok"
         if path == "/api/v2/dags/~/dagRuns":
             assert request.url.params["state"] == "failed"
             return httpx.Response(200, json={"dag_runs": self.runs})
@@ -86,7 +86,7 @@ def test_a_failed_run_becomes_a_report_and_is_not_handled_twice(world):
     assert [p.name for p in written] == ["2026-10-31T092906Z-dbt_build.md"]
     report = written[0].read_text(encoding="utf-8")
     assert "AirflowException: exit code 1" in report and "model SQL broken" in report
-    assert "secret-token" not in report
+    assert "fake-tok" not in report
     assert fake.cleared == []
     assert shift(airflow, state, incidents, NOW, lambda *a: BROKEN, SILENT) == []
     assert State(state.path).data["last_checked"] == NOW.isoformat()
