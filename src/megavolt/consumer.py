@@ -171,6 +171,23 @@ def _commit(consumer, offsets: dict[tuple[str, int], int]) -> None:
         raise KafkaException(refused[0].error)
 
 
+def backlog() -> int:
+    """Messages of the readings topic the consumer group has not committed yet."""
+    from confluent_kafka import Consumer, TopicPartition
+
+    client = Consumer({"bootstrap.servers": bootstrap_servers(), "group.id": CONSUMER_GROUP})
+    try:
+        topic = client.list_topics(READINGS_TOPIC, timeout=10).topics[READINGS_TOPIC]
+        assigned = [TopicPartition(READINGS_TOPIC, number) for number in topic.partitions]
+        behind = 0
+        for partition in client.committed(assigned, timeout=10):
+            _, newest = client.get_watermark_offsets(partition, timeout=10)
+            behind += newest - max(partition.offset, 0)  # never committed: a negative sentinel
+        return behind
+    finally:
+        client.close()
+
+
 def run(once: bool) -> None:
     """Consume until stopped, or with `once`, until the topic has nothing more to give."""
     import psycopg

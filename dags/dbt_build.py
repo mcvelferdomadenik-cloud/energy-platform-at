@@ -1,4 +1,4 @@
-"""Rebuild staging and marts every morning, after the meter delivery has landed.
+"""Rebuild staging and marts after each meter delivery has landed.
 
 `dbt build` runs models and their tests in dependency order and stops at the first failing test,
 so a broken invariant never reaches a mart. dbt lives in its own venv in the image (see
@@ -11,7 +11,7 @@ from datetime import timedelta
 
 import pendulum
 from airflow.providers.standard.operators.bash import BashOperator
-from airflow.sdk import dag
+from airflow.sdk import Asset, dag
 
 VIENNA = "Europe/Vienna"
 PROJECT = "/opt/megavolt/dbt"
@@ -31,10 +31,12 @@ KILL_AFTER = "60"
 
 @dag(
     dag_id="dbt_build",
-    schedule="30 5 * * *",
+    # Runs when meter_stream_daily marks a delivery done, so a build can never precede the day's
+    # readings (after a reboot the catch-up starts every DAG at once). Deliveries that land while
+    # a build runs are folded into one next run. The clock plays no part, so there is no catch-up;
+    # while this DAG is paused, or the meter DAG waits for weather, nothing is built.
+    schedule=[Asset("meter_delivery")],
     start_date=pendulum.datetime(2026, 9, 1, tz=VIENNA),
-    # One build picks up everything that arrived meanwhile (catch-up deliveries arrive in date
-    # order, so they fall inside the incremental windows), so a missed morning needs no run.
     catchup=False,
     max_active_runs=1,
     default_args={
@@ -46,7 +48,7 @@ KILL_AFTER = "60"
     tags=["dbt", "warehouse"],
 )
 def dbt_build():
-    """Half an hour after meter_stream_daily: the consumer needs seconds, not minutes."""
+    """Right after meter_stream_daily: the consumer needs seconds to store a delivery."""
 
     BashOperator(
         task_id="dbt_build",

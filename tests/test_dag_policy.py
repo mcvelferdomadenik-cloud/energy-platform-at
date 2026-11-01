@@ -33,6 +33,16 @@ def test_every_expected_dag_is_present():
     assert ONE_DAY_PER_RUN | WINDOW_PER_RUN | {"apcs_load_profiles"} == set(dag_keywords())
 
 
+def test_dbt_builds_after_the_meter_delivery_not_on_the_clock():
+    schedule = dag_keywords()["dbt_build"]["schedule"]
+    assert isinstance(schedule, ast.List) and len(schedule.elts) == 1
+    asset = schedule.elts[0]
+    assert asset.func.id == "Asset" and ast.literal_eval(asset.args[0]) == "meter_delivery"
+    meter = (DAGS / "meter_stream_daily.py").read_text(encoding="utf-8")
+    assert 'METER_DELIVERY = Asset("meter_delivery")' in meter
+    assert "outlets=[METER_DELIVERY]" in meter and "def wait_for_storage" in meter
+
+
 def test_every_dag_states_its_policy():
     for dag_id, keywords in dag_keywords().items():
         assert {"catchup", "max_active_runs"} <= set(keywords), dag_id

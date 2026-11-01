@@ -15,7 +15,8 @@ with winning_reading as (
            allocated_kwh,
            meter_id,
            version,
-           delivered_at
+           delivered_at,
+           received_at
     from {{ source('raw', 'meter_reading') }}
     -- Highest version wins; a later delivery breaks a tie; payload_hash makes the order total, so
     -- two sends of the same version with different values still resolve the same way every run.
@@ -30,6 +31,7 @@ select reading.metering_point,
        reading.allocated_kwh,
        reading.version,
        reading.delivered_at,
+       reading.received_at,
        reading.meter_id,
        period.meter_id                       as registered_meter_id,
        reading.meter_id = period.meter_id    as meter_matches_registry,

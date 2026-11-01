@@ -9,8 +9,10 @@ from datetime import UTC, datetime
 import pytest
 
 from megavolt.consumer import (
+    CONSUMER_GROUP,
     MAX_REASON_LENGTH,
     DeadLetter,
+    backlog,
     classify,
     next_offsets,
     partition,
@@ -218,3 +220,38 @@ def test_a_fault_that_cannot_heal_is_raised_at_once_without_retrying():
     with pytest.raises(Refused):
         with_retries(action, 5, 1.0, (Unreachable,), sleep=lambda _: None)
     assert calls["count"] == 1
+
+
+def test_backlog_sums_what_every_partition_still_holds(monkeypatch):
+    import confluent_kafka
+
+    class Partition:
+        def __init__(self, topic, number, offset=-1001):
+            self.topic, self.partition, self.offset = topic, number, offset
+
+    class FakeConsumer:
+        def __init__(self, config):
+            assert config["group.id"] == CONSUMER_GROUP
+
+        def list_topics(self, topic, timeout):
+            return type(
+                "Meta", (), {"topics": {topic: type("T", (), {"partitions": {0: 0, 1: 0, 2: 0}})}}
+            )
+
+        def committed(self, partitions, timeout):
+            # Partition 1 was never committed: the client answers with a negative sentinel.
+            return [
+                Partition(p.topic, p.partition, {0: 5, 1: -1001, 2: 3}[p.partition])
+                for p in partitions
+            ]
+
+        def get_watermark_offsets(self, partition, timeout):
+            return 0, {0: 7, 1: 2, 2: 3}[partition.partition]
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("KAFKA_BOOTSTRAP_SERVERS", "broker.test:9092")
+    monkeypatch.setattr(confluent_kafka, "Consumer", FakeConsumer)
+    monkeypatch.setattr(confluent_kafka, "TopicPartition", Partition)
+    assert backlog() == (7 - 5) + (2 - 0) + (3 - 3)

@@ -19,6 +19,7 @@ def rendered(model: str) -> str:
     sql = re.sub(r"\{\{\s*config\(.*?\)\s*\}\}", "", sql, flags=re.DOTALL)
     # Outside a dbt run there is no previous build, so an incremental window is the whole history.
     sql = re.sub(r"\{\{\s*recent_only\(.*?\)\s*\}\}", "true", sql)
+    sql = re.sub(r"'\{\{\s*run_started_at\s*\}\}'::timestamptz", "now()", sql)
     sql = re.sub(r"\{\{\s*var\('(\w+)'\)\s*\}\}", lambda m: str(VARS[m.group(1)]), sql)
     sql = re.sub(r"\{\{\s*source\('raw',\s*'(\w+)'\)\s*\}\}", r"raw.\1", sql)
     return re.sub(r"\{\{\s*ref\('(\w+)'\)\s*\}\}", lambda m: f"({rendered(m.group(1))})", sql)
