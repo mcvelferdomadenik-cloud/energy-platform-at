@@ -4,3 +4,6 @@
 # tests/test_entsoe.py: an invented 12-character token used to prove redact() hides it.
 # Verified 2026-09-13 not equal to the real ENTSO-E token.
 62b835bad854b4091fcf22073a565951df2d8640:tests/test_entsoe.py:megavolt-credential-assignment:52
+# e9032c9 (branch feat/night-shift only; the squash merge carries the shortened value): the fake
+# Airflow of tests/test_night_shift.py answered with the literal "secret-token". Not a credential.
+e9032c90f047d5de1d0ee144814576d106027020:tests/test_night_shift.py:megavolt-credential-assignment:43
