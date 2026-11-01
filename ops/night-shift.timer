@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the MegaVolt night shift every 30 minutes while the server is up
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+
+[Install]
+WantedBy=timers.target

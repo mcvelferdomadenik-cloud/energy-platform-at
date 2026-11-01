@@ -1,0 +1,9 @@
+# User unit: copy to ~/.config/systemd/user/ with the timer, then
+#   systemctl --user daemon-reload && systemctl --user enable --now night-shift.timer
+[Unit]
+Description=MegaVolt night shift: report failed Airflow runs
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/energy_project
+ExecStart=%h/.local/bin/uv run --env-file .env python -m megavolt_ops.night_shift
