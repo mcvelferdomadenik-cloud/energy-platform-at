@@ -16,9 +16,13 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import pendulum
-from airflow.sdk import dag, task
+from airflow.sdk import Asset, dag, task
 
+from megavolt.consumer import backlog
 from megavolt.simulate import deliver, weather_ready
+
+# Marked once the consumer has stored the day; dbt_build is scheduled on it, not on the clock.
+METER_DELIVERY = Asset("meter_delivery")
 
 VIENNA = "Europe/Vienna"
 # A timed-out sensor is not retried, and a day it gives up on is delivered only by hand (clear the
@@ -67,7 +71,19 @@ def meter_stream_daily():
         print(f"{delivery_date}: registered {registered} new rows, produced {produced} messages")
         return produced
 
-    wait_for_weather() >> produce_delivery_day()
+    # Produced is not stored: the consumer collects a batch for up to five seconds and inserts it
+    # in one transaction, and a build started before that would miss the tail of the delivery.
+    @task.sensor(
+        poke_interval=timedelta(seconds=30),
+        timeout=timedelta(hours=1),
+        mode="reschedule",
+        outlets=[METER_DELIVERY],
+    )
+    def wait_for_storage() -> bool:
+        """The delivery counts once nothing of it is left on the topic."""
+        return backlog() == 0
+
+    wait_for_weather() >> produce_delivery_day() >> wait_for_storage()
 
 
 meter_stream_daily()
