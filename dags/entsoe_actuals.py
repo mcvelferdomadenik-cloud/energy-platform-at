@@ -5,6 +5,9 @@ delivery as intermediate (A01) and confirmed as final (A02) days later; load val
 too. So every run re-fetches a window of past days, one request per day so each day keeps its own
 document status, and the warehouse keeps only what changed: `payload_hash` covers value and status,
 so an unchanged interval inserts nothing.
+
+The imbalance task marks `imbalance_prices` when the whole window is stored; dbt_build waits for
+it, so a settlement is never built on the readings of a day whose prices are still being fetched.
 """
 
 from __future__ import annotations
@@ -13,10 +16,12 @@ import time
 from datetime import timedelta
 
 import pendulum
-from airflow.sdk import Param, dag, task
+from airflow.sdk import Asset, Param, dag, task
 
 from megavolt.entsoe import AT_BIDDING_ZONE, EntsoeError, actual_load, imbalance_prices
 from megavolt.warehouse import store_actual_load, store_imbalance_prices
+
+IMBALANCE_PRICES = Asset("imbalance_prices")
 
 VIENNA = "Europe/Vienna"
 # Probed on 2026-09-19: 1 August was still intermediate after 49 days, 15 July final after 66.
@@ -64,7 +69,7 @@ def finished(stored: int, failed: list[str]) -> int:
 def entsoe_actuals():
     """Two independent fetches; one failing must not stop the other."""
 
-    @task
+    @task(outlets=[IMBALANCE_PRICES])
     def fetch_imbalance_prices(**context) -> int:
         """One request per day, so each day carries its own intermediate/final status."""
         stored, failed = 0, []
