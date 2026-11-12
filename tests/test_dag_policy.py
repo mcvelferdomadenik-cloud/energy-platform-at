@@ -29,18 +29,36 @@ def dag_keywords() -> dict[str, dict[str, ast.expr]]:
     return found
 
 
+def outlets_by_task(dag_file: str) -> dict[str, list[str]]:
+    """The names in `outlets=[...]` of each decorated task that has any, by function name."""
+    found = {}
+    for node in ast.walk(ast.parse((DAGS / dag_file).read_text(encoding="utf-8"))):
+        for decorator in getattr(node, "decorator_list", []):
+            for keyword in getattr(decorator, "keywords", []):
+                if keyword.arg == "outlets":
+                    found[node.name] = [element.id for element in keyword.value.elts]
+    return found
+
+
 def test_every_expected_dag_is_present():
     assert ONE_DAY_PER_RUN | WINDOW_PER_RUN | {"apcs_load_profiles"} == set(dag_keywords())
 
 
-def test_dbt_builds_after_the_meter_delivery_not_on_the_clock():
+def test_dbt_builds_after_the_delivery_and_its_prices_not_on_the_clock():
+    """A list is AND in Airflow: both assets, each marked by the task that stores last."""
     schedule = dag_keywords()["dbt_build"]["schedule"]
-    assert isinstance(schedule, ast.List) and len(schedule.elts) == 1
-    asset = schedule.elts[0]
-    assert asset.func.id == "Asset" and ast.literal_eval(asset.args[0]) == "meter_delivery"
+    assert isinstance(schedule, ast.List)
+    assert all(asset.func.id == "Asset" for asset in schedule.elts)
+    assert sorted(ast.literal_eval(asset.args[0]) for asset in schedule.elts) == [
+        "imbalance_prices",
+        "meter_delivery",
+    ]
     meter = (DAGS / "meter_stream_daily.py").read_text(encoding="utf-8")
     assert 'METER_DELIVERY = Asset("meter_delivery")' in meter
-    assert "outlets=[METER_DELIVERY]" in meter and "def wait_for_storage" in meter
+    assert outlets_by_task("meter_stream_daily.py") == {"wait_for_storage": ["METER_DELIVERY"]}
+    actuals = (DAGS / "entsoe_actuals.py").read_text(encoding="utf-8")
+    assert 'IMBALANCE_PRICES = Asset("imbalance_prices")' in actuals
+    assert outlets_by_task("entsoe_actuals.py") == {"fetch_imbalance_prices": ["IMBALANCE_PRICES"]}
 
 
 def test_every_dag_states_its_policy():
