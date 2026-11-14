@@ -59,6 +59,7 @@ dbt = [
 ]
 dev = [
     "pytest>=9.1.1",
+    "pytest-playwright>=0.10.0",
     "pyyaml>=6.0.3",
     "ruff>=0.16.6",
 ]

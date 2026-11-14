@@ -41,8 +41,8 @@ class Customer:
     # What we supply in a year: the registered consumption minus the community's share, read from
     # the settled history. This, not the whole consumption, is the volume an offer is for. Zero
     # until a customer has settled quarter hours; the list page does not compute it. It is the
-    # same average the engine checks a volume against, so from the tool that check cannot fail;
-    # it still guards a volume typed or uploaded by hand.
+    # same average the engine checks a volume against, so an offer at this volume passes that
+    # check; a volume typed into the tool by hand can still be refused by it.
     supplied_kwh: float = 0.0
 
 

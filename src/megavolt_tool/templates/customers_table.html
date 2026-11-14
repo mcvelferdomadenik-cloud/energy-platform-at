@@ -1,0 +1,18 @@
+{% if partial %}<span class="count" id="count" hx-swap-oob="true">{{ customers | length }} of {{ total }} registered</span>{% endif %}
+{% if customers %}
+<table>
+  <thead><tr><th>Metering point</th><th>Segment</th><th>Profile</th><th class="num"><span class="unit">kWh / year</span></th></tr></thead>
+  <tbody>
+  {% for c in customers %}
+    <tr>
+      <td class="mono" style="width:1%; white-space:nowrap"><a href="/customers/{{ c.metering_point }}">{{ c.metering_point }}</a></td>
+      <td>{{ c.segment }}</td>
+      <td>{{ c.profile_type }}</td>
+      <td class="num">{{ "{:,.0f}".format(c.annual_kwh) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card"><p class="muted">No customer matches{% if q %} "{{ q }}"{% endif %}.</p></div>
+{% endif %}

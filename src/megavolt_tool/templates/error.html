@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block content %}
+<p class="crumb"><a href="/">← all customers</a></p>
+<h1>This page cannot be shown</h1>
+<div class="card error-card"><p>{{ error[:1] | upper }}{{ error[1:] }}.</p></div>
+{% endblock %}

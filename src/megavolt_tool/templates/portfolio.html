@@ -1,9 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Portfolio</h1>
-{% if error %}
-<div class="card"><p class="error">{{ error }}</p></div>
-{% else %}
-<p class="muted">{{ portfolio.high_errors | length }} customers with a year of history, {{ portfolio.skipped }} without one yet.</p>
-{% endif %}
+<p class="muted">The level of the fixed offer is set by the pricing engine, not on this page. This page shows how today's offers spread across our customers, each priced for one year at the volume we supply.</p>
+{% include "portfolio_summary.html" %}
 {% endblock %}
