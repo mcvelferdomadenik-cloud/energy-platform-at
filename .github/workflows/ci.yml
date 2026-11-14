@@ -40,6 +40,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      # The browser tests skip without a browser; here they run. The build is pinned through
+      # the playwright version in uv.lock; --with-deps adds the libraries Chromium needs.
+      - name: Install Chromium for the browser tests
+        run: uv run playwright install --with-deps chromium
+
       - name: Lint
         run: uv run ruff check .
 

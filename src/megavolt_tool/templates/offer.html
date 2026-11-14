@@ -1,24 +1,50 @@
 {% if error %}
-<div class="card"><p class="error">{{ error }}</p></div>
+<div class="card error-card"><p>{{ error[:1] | upper }}{{ error[1:] }}.</p></div>
 {% else %}
+<div class="grid">
 {% if offer.fixed %}
-<div class="card">
-  <p class="muted">Fixed price, one year</p>
-  <p class="big">{{ "%.2f" | format(offer.fixed.eur_kwh * 100) }} c/kWh</p>
-  {% if user.role == "analyst" %}
-  <p class="muted">base {{ "%.1f" | format(offer.fixed.expected_eur_kwh * 100) }} · market {{ "%.1f" | format(offer.fixed.market_premium_eur_kwh * 100) }} · volume {{ "%.1f" | format(offer.fixed.volume_premium_eur_kwh * 100) }} · margin {{ "%.1f" | format(offer.fixed.margin_eur_kwh * 100) }} c/kWh</p>
+<div class="card accent-blue" id="offer-fixed">
+  <p class="label">Fixed price, one year</p>
+  {% if fixed_year %}
+  <p class="big">{{ "{:,.0f}".format(fixed_year) }} <span class="unit">€ a year</span></p>
+  <p class="muted"><strong>{{ "%.2f" | format(offer.fixed.eur_kwh * 100) }} c/kWh</strong>, the same every month, whatever the market does.</p>
+  {% else %}
+  <p class="big">{{ "%.2f" | format(offer.fixed.eur_kwh * 100) }} <span class="unit">c/kWh</span></p>
+  <p class="muted">The same every month, whatever the market does.</p>
   {% endif %}
+  {% if user.role == "analyst" and offer.fixed.eur_kwh > 0 %}
+  {% set parts = [("base", offer.fixed.expected_eur_kwh), ("market", offer.fixed.market_premium_eur_kwh), ("volume", offer.fixed.volume_premium_eur_kwh), ("margin", offer.fixed.margin_eur_kwh)] %}
+  <div class="share parts">{% for name, part in parts %}<i style="width:{{ "{:.1f}".format(100 * part / offer.fixed.eur_kwh) }}%" title="{{ name }}"></i>{% endfor %}</div>
+  <p class="share-key">{% for name, part in parts %}{{ name }} {{ "%.1f" | format(part * 100) }}{% if not loop.last %} · {% endif %}{% endfor %} c/kWh</p>
+  {% endif %}
+  <p class="muted">assuming {{ "{:,.0f}".format(annual_kwh) }} kWh a year</p>
 </div>
 {% endif %}
 {% if offer.dynamic %}
-<div class="card">
-  <p class="muted">Market-linked tariff, one year</p>
-  <p class="big">about {{ "{:,}".format(offer.dynamic.expected_bill_eur) }} €</p>
-  <p>in a year of bad days up to <strong>{{ "{:,}".format(offer.dynamic.high_bill_eur) }} €</strong> · fee {{ "%.1f" | format(offer.dynamic.fee_eur_kwh * 100) }} c/kWh on top of the market price</p>
+<div class="card accent-orange" id="offer-dynamic">
+  <p class="label">Market-linked tariff, one year</p>
+  <p class="big"><span class="unit">about</span> {{ "{:,}".format(offer.dynamic.expected_bill_eur) }} <span class="unit">€ a year</span></p>
+  <p class="muted">{% if annual_kwh %}<strong>About {{ "%.1f" | format(100 * offer.dynamic.expected_bill_eur / annual_kwh) }} c/kWh</strong> on average: {% endif %}the market price of each quarter hour <strong>+ {{ "%.1f" | format(offer.dynamic.fee_eur_kwh * 100) }} c/kWh</strong> fee. Up to <strong>{{ "{:,}".format(offer.dynamic.high_bill_eur) }} €</strong> in a bad year.</p>
+  <p class="muted">assuming {{ "{:,.0f}".format(annual_kwh) }} kWh a year</p>
 </div>
 {% endif %}
-<div class="card">
-  <p class="muted">Why</p>
-  <ul>{% for line in offer.reasons %}<li>{{ line }}</li>{% endfor %}</ul>
+</div>
+{% if bills %}
+<div class="card" id="chart-year">
+  <p class="section">A year, side by side</p>
+  <p class="muted">Both for {{ "{:,.0f}".format(annual_kwh) }} kWh a year{% if not volume_override %}, what we supply after the community's share{% endif %}.</p>
+  {{ bills }}
+</div>
+{% endif %}
+{% if months %}
+<div class="card" id="chart-months">
+  <p class="section">The last twelve months at this price</p>
+  <p class="muted">The customer's own consumption, month by month, priced as this contract would have: the seasons show.{% if months_note %} {{ months_note }}{% endif %}</p>
+  {{ months }}
+</div>
+{% endif %}
+<div class="card" id="offer-reasons">
+  <p class="section">Why this price</p>
+  <ul class="reasons">{% for lead, band, rest in reasons %}<li><b>{{ lead }}</b>{% if band %}<span class="pill">{{ band }}</span>{% endif %} {{ rest }}</li>{% endfor %}</ul>
 </div>
 {% endif %}

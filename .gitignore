@@ -47,3 +47,7 @@ desktop.ini
 
 # dbt anonymous usage id, per machine
 dbt/.user.yml
+
+# Agent definitions are local working tools, not part of the public repo
+.claude/agents/
+.claude/settings.local.json

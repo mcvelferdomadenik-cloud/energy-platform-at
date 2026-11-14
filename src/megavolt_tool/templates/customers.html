@@ -1,18 +1,14 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Customers</h1>
-<p class="muted">{{ customers | length }} registered. Pick one to price.</p>
-<table>
-  <thead><tr><th>Metering point</th><th>Segment</th><th>Profile</th><th>kWh / year</th></tr></thead>
-  <tbody>
-  {% for c in customers %}
-    <tr>
-      <td><a href="/customers/{{ c.metering_point }}">{{ c.metering_point }}</a></td>
-      <td>{{ c.segment }}</td>
-      <td>{{ c.profile_type }}</td>
-      <td>{{ "{:,.0f}".format(c.annual_kwh) }}</td>
-    </tr>
+<p class="muted">Pick a customer to price.</p>
+<form class="filters" hx-get="/" hx-target="#customers" hx-trigger="input changed delay:300ms, change">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search metering point" autocomplete="off" aria-label="Search by metering point">
+  <label class="chip"><input type="radio" name="segment" value="" {% if not segment %}checked{% endif %}> all</label>
+  {% for s in segments %}
+  <label class="chip"><input type="radio" name="segment" value="{{ s }}" {% if segment == s %}checked{% endif %}> {{ s }}</label>
   {% endfor %}
-  </tbody>
-</table>
+  <span class="count" id="count">{{ customers | length }} of {{ total }} registered</span>
+</form>
+<div id="customers">{% include "customers_table.html" %}</div>
 {% endblock %}

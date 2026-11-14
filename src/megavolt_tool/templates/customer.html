@@ -1,17 +1,48 @@
 {% extends "base.html" %}
 {% block content %}
-<p><a href="/">← all customers</a></p>
-<h1>{{ customer.metering_point }}</h1>
-<p class="muted">{{ customer.segment }} · profile {{ customer.profile_type }} · {{ "{:,.0f}".format(customer.annual_kwh) }} kWh a year{% if customer.supplied_kwh %}, of which we supply about {{ "{:,.0f}".format(customer.supplied_kwh) }} after the community's share{% endif %}</p>
+<p class="crumb"><a href="/">← all customers</a></p>
+<div class="hero">
+<h1>{{ customer.segment | capitalize }} · {{ customer.profile_type }} profile</h1>
+<p class="id">{{ customer.metering_point }}</p>
+<div class="tiles">
+  <div class="tile lead"><p class="label">We supply</p>
+    {% if customer.supplied_kwh %}
+    <p class="value">{{ "{:,.0f}".format(customer.supplied_kwh) }}<span class="unit">kWh a year, after the community's share</span></p>
+    {% set ours = 100 * customer.supplied_kwh / customer.annual_kwh %}
+    <div class="share" role="img" aria-label="we supply {{ "{:.0f}".format(ours) }} percent"><i class="us" style="width:{{ "{:.0f}".format(ours) }}%"></i><i class="them" style="width:{{ "{:.0f}".format(100 - ours) }}%"></i></div>
+    <p class="share-key">us {{ "{:.0f}".format(ours) }} % · community {{ "{:.0f}".format(100 - ours) }} %</p>
+    {% else %}
+    <p class="value muted" style="font-size:14px; font-weight:500">not yet settled</p>
+    {% endif %}
+  </div>
+  <div class="tile"><p class="label">Registered</p><p class="value">{{ "{:,.0f}".format(customer.annual_kwh) }}<span class="unit">kWh a year</span></p></div>
+  <div class="tile"><p class="label">Community covers</p><p class="value">{% if customer.supplied_kwh %}{{ "{:.0f}".format(100 - 100 * customer.supplied_kwh / customer.annual_kwh) }}<span class="unit">% of consumption</span>{% else %}<span class="muted" style="font-size:14px; font-weight:500">not yet settled</span>{% endif %}</p></div>
+  <div class="tile"><p class="label">Settled history</p><p class="value">{{ settled_days }}<span class="unit">days</span></p></div>
+</div>
+</div>
 <div class="card">
-  <form hx-post="/customers/{{ customer.metering_point }}/offer" hx-target="#offer" hx-swap="innerHTML">
-    <label>Contract
-      <select name="contract">
-        {% for c in contracts %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
-      </select>
-    </label>
-    <button type="submit">Calculate</button>
+  <form hx-post="/customers/{{ customer.metering_point }}/offer" hx-target="#offer" hx-swap="innerHTML"
+        hx-disabled-elt="find button">
+    <div class="row">
+      <span class="muted">Contract</span>
+      {% for c in contracts %}
+      <label class="chip" data-contract="{{ c }}"><input type="radio" name="contract" value="{{ c }}" {% if c == "both" %}checked{% endif %}> {{ c }}</label>
+      {% endfor %}
+      <label for="annual_kwh" class="muted">Annual volume kWh</label>
+      <input type="text" id="annual_kwh" name="annual_kwh" inputmode="numeric" autocomplete="off"
+             pattern="{{ volume_pattern }}" title="Whole kWh, 1 to {{ "{:,}".format(max_annual_kwh) }}; empty = what we supply"
+             placeholder="{{ "{:,.0f}".format(customer.supplied_kwh) }}" class="volume">
+      <button type="submit" id="calculate">Calculate</button>
+    </div>
+    <p class="htmx-indicator wait"><span class="spinner"></span>Calculating… the first run of the day can take a few minutes.</p>
   </form>
 </div>
 <div id="offer"></div>
+{% if profile %}
+<div class="card" id="chart-day">
+  <p class="section">A typical day</p>
+  <p class="muted">What this customer takes from us in each hour, averaged over the settled history.</p>
+  {{ profile }}
+</div>
+{% endif %}
 {% endblock %}

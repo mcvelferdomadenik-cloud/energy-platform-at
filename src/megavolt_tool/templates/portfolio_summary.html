@@ -1,0 +1,45 @@
+{% if error %}
+<div id="portfolio"><div class="card error-card"><p>{{ error[:1] | upper }}{{ error[1:] }}.</p></div></div>
+{% elif segments is not defined %}
+<div id="portfolio" hx-get="/portfolio/summary" hx-trigger="every 10s" hx-swap="outerHTML">
+  <div class="card"><p class="wait on"><span class="spinner"></span>Still calculating, this takes a few minutes. The page fills in by itself.<span class="htmx-indicator muted">Checking…</span></p></div>
+</div>
+{% else %}
+<div id="portfolio">
+<p class="section">Customers by segment</p>
+<div class="scroll">
+<table id="segments">
+  <thead><tr><th scope="col">Segment</th><th scope="col" class="num">Customers</th><th scope="col" class="num">Registered <span class="unit">kWh / year</span></th><th scope="col" class="num">Supplied <span class="unit">kWh / year</span></th><th scope="col" class="num">Share supplied</th><th scope="col" class="num">Priced</th><th scope="col" class="num">Not priced</th></tr></thead>
+  <tbody>
+  {% for s in segments %}
+    <tr><th scope="row">{{ s.segment }}</th><td class="num">{{ s.customers }}</td><td class="num">{{ "{:,.0f}".format(s.registered_kwh) }}</td><td class="num">{{ "{:,.0f}".format(s.supplied_kwh) }}</td><td class="num">{{ "{:.0f}".format(s.share) }} %</td><td class="num">{{ s.priced }}</td><td class="num">{{ s.customers - s.priced }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted">Supplied is what the customer takes from us after the community's share. Not priced: no settled year of history yet.</p>
+<p class="section">Offers by segment</p>
+<div class="scroll">
+<table id="offers">
+  <thead>
+    <tr><th scope="col" rowspan="2">Segment</th><th scope="colgroup" colspan="3" class="num">Fixed offer <span class="unit">c/kWh</span></th><th scope="colgroup" colspan="3" class="num">Expected market-linked bill <span class="unit">€ a year</span></th></tr>
+    <tr><th scope="col" class="num">Min</th><th scope="col" class="num">Median</th><th scope="col" class="num">Max</th><th scope="col" class="num">Min</th><th scope="col" class="num">Median</th><th scope="col" class="num">Max</th></tr>
+  </thead>
+  <tbody>
+  {% for s in segments %}
+    <tr><th scope="row">{{ s.segment }}</th>
+    {% if s.fixed %}{% for v in s.fixed %}<td class="num">{{ "%.2f" | format(v) }}</td>{% endfor %}{% for v in s.bills %}<td class="num">{{ "{:,.0f}".format(v) }}</td>{% endfor %}
+    {% else %}<td class="num muted" colspan="6">no customer priced</td>{% endif %}</tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if chart %}
+<div class="card" id="chart-fixed">
+  <p class="section">Fixed offer by segment</p>
+  <p class="muted">Lowest to highest offer in each segment; the dark mark is the median.</p>
+  {{ chart }}
+</div>
+{% endif %}
+</div>
+{% endif %}
