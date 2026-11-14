@@ -86,6 +86,12 @@ def warm_portfolio(calculator: Engine | None = None) -> None:
     except (ToolError, StoreError) as exc:
         portfolio.failed, portfolio.failed_at = str(exc), datetime.now(UTC)
         log.warning("portfolio not warmed: %s", exc)
+    except Exception:
+        portfolio.failed, portfolio.failed_at = (
+            "The portfolio could not be computed.",
+            datetime.now(UTC),
+        )
+        log.exception("portfolio not warmed")
 
 
 app = FastAPI(

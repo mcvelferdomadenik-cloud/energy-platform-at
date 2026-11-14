@@ -25,7 +25,9 @@ LISTENERS = [
 
 
 def opens_port(command: str) -> str | None:
-    """The text that makes the command a listener, or None."""
+    """The text that makes the command a listener, or None; a huge command is asked about as is."""
+    if len(command) > 20_000:
+        return "a command too long to check"
     for pattern in LISTENERS:
         match = re.search(pattern, command, re.IGNORECASE)
         if match:

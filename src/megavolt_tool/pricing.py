@@ -214,9 +214,13 @@ class Portfolio:
             "offers": self._offers,
         }
         handle, beside = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            json.dump(data, out)
-        os.replace(beside, path)
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as out:
+                json.dump(data, out)
+            os.replace(beside, path)
+        except OSError:
+            Path(beside).unlink(missing_ok=True)
+            raise
 
 
 def _offers(

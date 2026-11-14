@@ -48,3 +48,7 @@ def test_a_listener_asks(command):
 )
 def test_a_client_or_plain_command_is_silent(command):
     assert verdict(command) is None
+
+
+def test_a_huge_command_asks_instead_of_timing_out():
+    assert verdict("nc " * 200_000) == "ask"
